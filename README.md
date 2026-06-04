@@ -1,30 +1,272 @@
 # media-lookup
 
-`media-lookup` is a small media lookup service for movie and TV metadata.
+`media-lookup` is a Cloudflare Worker that provides movie and TV metadata without exposing the TMDB token to client applications.
 
-It is designed to let apps fetch titles, release years, overviews, and posters without shipping a TMDB token inside the client application.
+It is currently built for `irc-news`, but the HTTP contract is intentionally small and generic.
 
-## What It Provides
+## Features
 
-- Movie and TV metadata lookup.
-- Poster proxying and caching.
-- A daily snapshot of useful titles.
-- A minimal poster/title preview page.
-- Lightweight traffic and cache observability.
+- TMDB movie and TV lookup by title, type, year, and language.
+- KV-backed lookup cache with 30 day TTL.
+- Lazy daily home snapshot used to warm the lookup cache.
+- Minimal HTML home page grouped by source: movie trending, movie popular, TV trending, TV popular.
+- Direct TMDB image CDN usage for posters. The Worker does not proxy poster bytes.
+- Lazy English overview fallback for items whose localized overview is empty.
+- Console-based structured metrics events, ready to be replaced by Analytics Engine later.
 
-## Why It Exists
+## Stack
 
-Desktop and client-side apps should not embed third-party API tokens. `media-lookup` keeps provider credentials on the server side and exposes a small HTTPS API that clients can call safely.
+- Cloudflare Workers, Module Worker mode.
+- TypeScript strict.
+- `pnpm`.
+- Biome for format/lint.
+- Vitest for core tests.
+- `@cloudflare/vitest-pool-workers` for Worker runtime tests.
+- Cloudflare KV for daily snapshots, lookup cache, and overview fallback cache.
 
-The first provider target is TMDB, and the first deployment target is Cloudflare Workers. The project is intentionally named and structured so it can support other providers or deployment platforms later.
+## HTTP Contract
 
-## Status
+### Home
 
-Planning stage. The technical direction and API contract are documented, but the Worker implementation has not been scaffolded yet.
+```http
+GET /
+```
 
-## Documentation
+Serves the HTML preview page.
 
-- [Project plan](docs/project.md)
+The home page also performs the lazy daily refresh for the default language. If the daily snapshot for the current day already exists, it is served from KV without calling TMDB.
+
+The current daily sources are:
+
+- `/trending/movie/day`
+- `/movie/popular`
+- `/trending/tv/day`
+- `/tv/popular`
+
+Daily snapshot items whose localized title contains no Latin letters are excluded from the home/warmup flow.
+
+### Lookup
+
+```http
+GET /?type=movie&title=Dune&year=2024&language=it-IT
+GET /?type=tv&title=Breaking%20Bad&year=2008&language=it-IT
+```
+
+Response:
+
+```json
+{
+  "type": "movie",
+  "provider": "tmdb",
+  "remoteId": "693134",
+  "title": "Dune - Parte due",
+  "year": 2024,
+  "overview": "Trama localizzata se disponibile",
+  "posterPath": "/abc123.jpg"
+}
+```
+
+Not found:
+
+```http
+404
+```
+
+Supported languages are configured through `SUPPORTED_LANGUAGES`. Missing `language` falls back to `DEFAULT_LANGUAGE`.
+
+### English Overview Fallback
+
+```http
+GET /translate?type=movie&id=693134&language=en-US
+GET /translate?type=tv&id=1399&language=en-US
+```
+
+This endpoint is intentionally lazy. Clients should call it only after explicit user action when the localized `overview` is empty.
+
+It does not perform machine translation. It asks TMDB for the media detail in the requested language, normally `en-US`.
+
+Response:
+
+```json
+{
+  "overview": "English overview from TMDB.",
+  "language": "en-US"
+}
+```
+
+Not found:
+
+```http
+404
+```
+
+The home page uses this endpoint behind the `Recupera trama EN` button.
+
+### Daily Snapshot Diagnostic
+
+```http
+GET /daily?language=it-IT
+```
+
+Returns the currently stored daily snapshot. This endpoint is read-only: it does not generate a snapshot by itself.
+
+If no snapshot exists:
+
+```http
+404
+```
+
+## Poster Handling
+
+The Worker returns only `posterPath`. Clients should build TMDB image CDN URLs directly:
+
+```text
+https://image.tmdb.org/t/p/w185/<posterPath-without-leading-slash>
+```
+
+Recommended sizes:
+
+- `w185` for lists and compact cards.
+- `w342` or `w500` only for larger views.
+- Avoid `original` by default.
+
+If `irc-news` wants local filesystem caching, it should cache the final CDN size it actually displays.
+
+## Cache
+
+All application cache lives in Cloudflare KV through the `DAILY_KV` binding.
+
+Lookup metadata:
+
+```text
+lookup:v1:<language>:<type>:<normalized-title>:<year-or-none>
+```
+
+Title normalization is shared by runtime lookup and daily warmup:
+
+- lowercase
+- accents removed
+- repeated whitespace collapsed
+- punctuation treated as separators
+
+Example: `Dune - Parte due` and `Dune Parte Due` produce the same title key.
+
+Daily snapshot:
+
+```text
+daily:v1:<language>
+```
+
+English overview fallback:
+
+```text
+overview_fallback:v1:<language>:<type>:<remoteId>
+```
+
+TTL:
+
+- lookup metadata: 30 days
+- overview fallback success: 30 days
+- overview fallback not found: 1 day
+- daily snapshot: one current snapshot per language, refreshed lazily by date
+
+## irc-news Integration
+
+Use lookup first:
+
+```text
+<WORKER_URL>?type=movie|tv&title=<title>&language=<language>&year=<optional>
+```
+
+Use the returned `posterPath` to build a direct TMDB CDN image URL.
+
+If `overview` is empty, show a user-triggered action and call:
+
+```text
+<WORKER_URL>/translate?type=<movie|tv>&id=<remoteId>&language=en-US
+```
+
+Do not prefetch English fallbacks for every item. The endpoint is designed for explicit clicks so we do not waste TMDB calls on titles the user never opens.
+
+## Configuration
+
+Cloudflare secret:
+
+```text
+TMDB_TOKEN
+```
+
+Set it with:
+
+```sh
+wrangler secret put TMDB_TOKEN
+```
+
+Local development uses `.dev.vars`, which must not be committed:
+
+```text
+TMDB_TOKEN=...
+```
+
+Non-sensitive vars are configured in `wrangler.jsonc`:
+
+```text
+DEFAULT_LANGUAGE=it-IT
+SUPPORTED_LANGUAGES=it-IT,en-US
+DAILY_REFRESH_TIME_ZONE=Europe/Rome
+```
+
+Required binding:
+
+```text
+DAILY_KV
+```
+
+## Local Development
+
+Install dependencies:
+
+```sh
+pnpm install
+```
+
+Create `.dev.vars` from `.dev.vars.example` and set `TMDB_TOKEN`.
+
+Start the Worker locally:
+
+```sh
+pnpm dev -- --port 8787
+```
+
+Useful local URLs:
+
+```text
+http://127.0.0.1:8787/
+http://127.0.0.1:8787/?type=movie&title=Dune&year=2024&language=it-IT
+http://127.0.0.1:8787/translate?type=movie&id=693134&language=en-US
+http://127.0.0.1:8787/daily?language=it-IT
+```
+
+Quality checks:
+
+```sh
+pnpm lint
+pnpm type-check
+pnpm test
+pnpm test:worker
+```
+
+## Deployment Notes
+
+Before exposing the Worker publicly, protect routes at the Cloudflare edge level:
+
+- Home `/`: public with rate limiting.
+- Lookup and `/translate`: protected or rate-limited depending on how `irc-news` calls them.
+- `/daily`: diagnostic endpoint, should be protected.
+
+Current lookup requests use `/` with query parameters, while the home uses `/` without query parameters. If Cloudflare edge rules need different policies for home and lookup, they must match query parameters, or the HTTP contract should be changed to a dedicated `/lookup` route.
+
+In-code authorization still counts as a Worker invocation. Abuse protection that should avoid Worker credit consumption needs to happen before the Worker, for example with Cloudflare WAF, Access, or rate limiting rules.
 
 ## TMDB Attribution
 

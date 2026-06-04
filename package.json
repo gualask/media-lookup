@@ -1,0 +1,25 @@
+{
+  "name": "media-lookup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "scripts": {
+    "dev": "HOME=$PWD/.wrangler/home CI=1 WRANGLER_LOG_PATH=.wrangler/logs WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false wrangler dev --show-interactive-dev-session=false",
+    "deploy": "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy",
+    "generate-types": "WRANGLER_LOG_PATH=.wrangler/logs wrangler types",
+    "format": "biome format --write .",
+    "lint": "biome ci .",
+    "check": "biome check --write .",
+    "type-check": "pnpm run generate-types && tsc --noEmit",
+    "test": "vitest run",
+    "test:worker": "WRANGLER_LOG_PATH=.wrangler/logs vitest --config vitest.worker.config.ts run"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@cloudflare/vitest-pool-workers": "^0.16.12",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.97.0"
+  }
+}

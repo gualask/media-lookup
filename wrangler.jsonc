@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "media-lookup",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-03",
+  "vars": {
+    "DEFAULT_LANGUAGE": "it-IT",
+    "SUPPORTED_LANGUAGES": "it-IT,en-US",
+    "DAILY_REFRESH_TIME_ZONE": "Europe/Rome"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "DAILY_KV",
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
+    }
+  ]
+}
