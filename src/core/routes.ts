@@ -33,16 +33,11 @@ export function parseRoute(request: Request, config: AppConfig): RouteParseResul
       return { ok: true, route: { kind: 'page' } };
     }
 
-    if (
-      url.searchParams.has('type') ||
-      url.searchParams.has('title') ||
-      url.searchParams.has('year') ||
-      url.searchParams.has('language')
-    ) {
-      return parseLookupRoute(url.searchParams, config);
-    }
+    return badRequest('Root route does not accept query parameters');
+  }
 
-    return badRequest('Unknown query parameters');
+  if (url.pathname === '/lookup') {
+    return parseLookupRoute(url.searchParams, config);
   }
 
   if (url.pathname === '/daily') {

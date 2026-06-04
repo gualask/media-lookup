@@ -5,7 +5,7 @@ import { ProviderConfigurationError, UpstreamProviderError } from './errors';
 import { renderPreviewPage } from './htmlPage';
 import { cacheHeaders, errorResponse, htmlResponse, jsonResponse } from './responses';
 import { parseRoute } from './routes';
-import type { MediaMetadata, OverviewTranslation } from './types';
+import type { DailySnapshot, DailySnapshotItem, MediaMetadata, OverviewTranslation } from './types';
 
 const OVERVIEW_NOT_FOUND_TTL_SECONDS = 60 * 60 * 24;
 
@@ -38,6 +38,7 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
 
 async function handlePage(deps: Deps): Promise<Response> {
   const { refreshed, snapshot } = await ensureDailySnapshot(deps, deps.config.defaultLanguage);
+  const displaySnapshot = await hydrateSnapshotOverviewFallbacks(deps, snapshot);
 
   await deps.metrics.record({
     route: 'page',
@@ -49,7 +50,7 @@ async function handlePage(deps: Deps): Promise<Response> {
     language: deps.config.defaultLanguage,
   });
 
-  return htmlResponse(renderPreviewPage(snapshot));
+  return htmlResponse(renderPreviewPage(displaySnapshot));
 }
 
 async function handleLookup(
@@ -178,6 +179,42 @@ async function handleDaily(deps: Deps, language: string): Promise<Response> {
   }
 
   return jsonResponse(snapshot);
+}
+
+async function hydrateSnapshotOverviewFallbacks(
+  deps: Deps,
+  snapshot: DailySnapshot,
+): Promise<DailySnapshot> {
+  const items = await Promise.all(
+    snapshot.items.map(async (item) => {
+      if (item.overview.trim()) {
+        return item;
+      }
+
+      const fallback = await safeOverviewTranslationCacheGet(
+        deps,
+        overviewFallbackCacheKey({
+          type: item.type,
+          remoteId: item.remoteId,
+          language: 'en-US',
+        }),
+      );
+
+      if (fallback?.status !== 'found') {
+        return item;
+      }
+
+      return {
+        ...item,
+        overview: fallback.overview,
+      } satisfies DailySnapshotItem;
+    }),
+  );
+
+  return {
+    ...snapshot,
+    items,
+  };
 }
 
 function handleError(error: unknown): Response {

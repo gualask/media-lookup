@@ -48,8 +48,8 @@ Daily snapshot items whose localized title contains no Latin letters are exclude
 ### Lookup
 
 ```http
-GET /?type=movie&title=Dune&year=2024&language=it-IT
-GET /?type=tv&title=Breaking%20Bad&year=2008&language=it-IT
+GET /lookup?type=movie&title=Dune&year=2024&language=it-IT
+GET /lookup?type=tv&title=Breaking%20Bad&year=2008&language=it-IT
 ```
 
 Response:
@@ -101,6 +101,8 @@ Not found:
 ```
 
 The home page uses this endpoint behind the `Recupera trama EN` button.
+
+When a fallback is already cached, the home page hydrates empty overviews from `overview_fallback` while rendering. The browser also stores successful click results in `localStorage`, so an immediate refresh keeps showing the recovered English overview even before KV propagation catches up.
 
 ### Daily Snapshot Diagnostic
 
@@ -175,7 +177,7 @@ TTL:
 Use lookup first:
 
 ```text
-<WORKER_URL>?type=movie|tv&title=<title>&language=<language>&year=<optional>
+<WORKER_URL>/lookup?type=movie|tv&title=<title>&language=<language>&year=<optional>
 ```
 
 Use the returned `posterPath` to build a direct TMDB CDN image URL.
@@ -242,7 +244,7 @@ Useful local URLs:
 
 ```text
 http://127.0.0.1:8787/
-http://127.0.0.1:8787/?type=movie&title=Dune&year=2024&language=it-IT
+http://127.0.0.1:8787/lookup?type=movie&title=Dune&year=2024&language=it-IT
 http://127.0.0.1:8787/translate?type=movie&id=693134&language=en-US
 http://127.0.0.1:8787/daily?language=it-IT
 ```
@@ -264,7 +266,7 @@ Before exposing the Worker publicly, protect routes at the Cloudflare edge level
 - Lookup and `/translate`: protected or rate-limited depending on how `irc-news` calls them.
 - `/daily`: diagnostic endpoint, should be protected.
 
-Current lookup requests use `/` with query parameters, while the home uses `/` without query parameters. If Cloudflare edge rules need different policies for home and lookup, they must match query parameters, or the HTTP contract should be changed to a dedicated `/lookup` route.
+Lookup uses the dedicated `/lookup` route so Cloudflare edge policies can distinguish it from the public home page with simple path-based rules.
 
 In-code authorization still counts as a Worker invocation. Abuse protection that should avoid Worker credit consumption needs to happen before the Worker, for example with Cloudflare WAF, Access, or rate limiting rules.
 

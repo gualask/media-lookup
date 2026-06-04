@@ -231,6 +231,37 @@ export function renderPreviewPage(snapshot: DailySnapshot | null): string {
   </main>
   <script>
     (() => {
+      const STORAGE_PREFIX = 'mediaLookup.overviewFallback.v1';
+
+      const storageKey = (button) =>
+        [STORAGE_PREFIX, button.dataset.language, button.dataset.type, button.dataset.id].join(':');
+
+      const applyOverview = (target, overview) => {
+        target.classList.remove('overview-empty');
+        target.textContent = overview || 'Trama non disponibile nemmeno in inglese.';
+      };
+
+      const hydrateCachedOverviews = () => {
+        for (const button of document.querySelectorAll('[data-overview-button]')) {
+          try {
+            const cached = localStorage.getItem(storageKey(button));
+
+            if (!cached) {
+              continue;
+            }
+
+            const data = JSON.parse(cached);
+            const target = button.closest('[data-overview-target]');
+
+            if (target && typeof data.overview === 'string') {
+              applyOverview(target, data.overview);
+            }
+          } catch {
+            localStorage.removeItem(storageKey(button));
+          }
+        }
+      };
+
       document.addEventListener('click', async (event) => {
         const eventTarget = event.target;
 
@@ -277,14 +308,21 @@ export function renderPreviewPage(snapshot: DailySnapshot | null): string {
           }
 
           const data = await response.json();
-          target.classList.remove('overview-empty');
-          target.textContent = data.overview || 'Trama non disponibile nemmeno in inglese.';
+          applyOverview(target, data.overview);
+
+          try {
+            localStorage.setItem(storageKey(button), JSON.stringify(data));
+          } catch {
+            // Ignore storage failures; KV still keeps the fallback for future renders.
+          }
         } catch {
           button.disabled = false;
           button.textContent = 'Riprova';
           status.textContent = 'Errore nel recupero.';
         }
       });
+
+      hydrateCachedOverviews();
     })();
   </script>
 </body>
