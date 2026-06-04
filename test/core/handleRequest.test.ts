@@ -55,7 +55,7 @@ describe('handleRequest', () => {
     const provider = new FakeMediaProvider();
     const lookupCache = new MemoryLookupCachePort();
     const deps = createTestDeps({ lookupCache, provider });
-    const url = 'https://example.com/?type=movie&title=Dune&year=2024&language=it-IT';
+    const url = 'https://example.com/lookup?type=movie&title=Dune&year=2024&language=it-IT';
 
     const first = await handleRequest(new Request(url), deps);
     const second = await handleRequest(new Request(url), deps);
@@ -84,7 +84,7 @@ describe('handleRequest', () => {
     const provider = new FakeMediaProvider();
     provider.lookupResult = null;
     const response = await handleRequest(
-      new Request('https://example.com/?type=movie&title=Missing&language=it-IT'),
+      new Request('https://example.com/lookup?type=movie&title=Missing&language=it-IT'),
       createTestDeps({ provider }),
     );
 
@@ -119,6 +119,38 @@ describe('handleRequest', () => {
         }),
       ),
     ).resolves.toContain('"status":"found"');
+  });
+
+  it('renders cached english overview fallback after the home is refreshed', async () => {
+    const provider = new FakeMediaProvider();
+    provider.lookupResult = {
+      type: 'movie',
+      provider: 'tmdb',
+      remoteId: '693134',
+      title: 'Dune - Parte due',
+      year: 2024,
+      overview: '',
+      posterPath: '/abc123.jpg',
+    };
+    const deps = createTestDeps({ provider });
+
+    const firstHome = await handleRequest(new Request('https://example.com/'), deps);
+    const firstHtml = await firstHome.text();
+
+    expect(firstHtml).toContain('Recupera trama EN');
+
+    const fallback = await handleRequest(
+      new Request('https://example.com/translate?type=movie&id=693134&language=en-US'),
+      deps,
+    );
+    const refreshedHome = await handleRequest(new Request('https://example.com/'), deps);
+    const refreshedHtml = await refreshedHome.text();
+
+    expect(fallback.status).toBe(200);
+    expect(provider.snapshotCalls).toBe(1);
+    expect(provider.translationCalls).toBe(1);
+    expect(refreshedHtml).toContain('English overview recovered from TMDB');
+    expect(refreshedHtml).not.toContain('Recupera trama EN');
   });
 
   it('returns 404 when english overview fallback is not found', async () => {
@@ -200,7 +232,7 @@ describe('handleRequest', () => {
 
     const response = await handleRequest(
       new Request(
-        'https://example.com/?type=movie&title=Dune%20Parte%20Due&year=2024&language=it-IT',
+        'https://example.com/lookup?type=movie&title=Dune%20Parte%20Due&year=2024&language=it-IT',
       ),
       deps,
     );

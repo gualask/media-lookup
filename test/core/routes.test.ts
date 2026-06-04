@@ -11,7 +11,7 @@ describe('parseRoute', () => {
 
   it('routes lookup requests and applies the default language', () => {
     const parsed = parseRoute(
-      new Request('https://example.com/?type=movie&title=Dune&year=2024'),
+      new Request('https://example.com/lookup?type=movie&title=Dune&year=2024'),
       testConfig,
     );
 
@@ -29,7 +29,7 @@ describe('parseRoute', () => {
 
   it('rejects unsupported languages', async () => {
     const parsed = parseRoute(
-      new Request('https://example.com/?type=movie&title=Dune&language=fr-FR'),
+      new Request('https://example.com/lookup?type=movie&title=Dune&language=fr-FR'),
       testConfig,
     );
 
@@ -39,6 +39,22 @@ describe('parseRoute', () => {
       expect(parsed.response.status).toBe(400);
       await expect(parsed.response.json()).resolves.toMatchObject({
         error: { code: 'unsupported_language' },
+      });
+    }
+  });
+
+  it('rejects legacy root lookup query params', async () => {
+    const parsed = parseRoute(
+      new Request('https://example.com/?type=movie&title=Dune&year=2024'),
+      testConfig,
+    );
+
+    expect(parsed.ok).toBe(false);
+
+    if (!parsed.ok) {
+      expect(parsed.response.status).toBe(400);
+      await expect(parsed.response.json()).resolves.toMatchObject({
+        error: { code: 'bad_request' },
       });
     }
   });
