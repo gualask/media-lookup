@@ -188,6 +188,12 @@ Use lookup first:
 <WORKER_URL>/lookup?type=movie|tv&title=<title>&language=<language>&year=<optional>
 ```
 
+Protected API routes require:
+
+```http
+Authorization: Bearer <API_BEARER_TOKEN>
+```
+
 Use the returned `posterPath` to build a direct TMDB CDN image URL.
 
 If `overview` is empty, show a user-triggered action and call:
@@ -204,18 +210,21 @@ Cloudflare secret:
 
 ```text
 TMDB_TOKEN
+API_BEARER_TOKEN
 ```
 
-Set it with:
+Set them with:
 
 ```sh
 wrangler secret put TMDB_TOKEN
+wrangler secret put API_BEARER_TOKEN
 ```
 
 Local development uses `.dev.vars`, which must not be committed:
 
 ```text
 TMDB_TOKEN=...
+API_BEARER_TOKEN=...
 ```
 
 Non-sensitive vars are configured in `wrangler.jsonc`:
@@ -230,7 +239,11 @@ Required binding:
 
 ```text
 DAILY_KV
+PUBLIC_RATE_LIMITER
+API_RATE_LIMITER
 ```
+
+`PUBLIC_RATE_LIMITER` protects the public home page with a small per-IP fallback limit. `API_RATE_LIMITER` protects `/lookup`, `/translate`, and `/daily`. These limits run inside the Worker, so they do not replace WAF/rate limiting rules on a Cloudflare zone, but they remain useful as a second layer even when a custom domain is added later.
 
 ## Local Development
 
@@ -257,6 +270,13 @@ http://127.0.0.1:8787/translate?type=movie&id=693134&language=en-US
 http://127.0.0.1:8787/daily?language=it-IT
 ```
 
+For protected API routes:
+
+```sh
+curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  "http://127.0.0.1:8787/lookup?type=movie&title=Dune&year=2024&language=it-IT"
+```
+
 Quality checks:
 
 ```sh
@@ -268,7 +288,13 @@ pnpm test:worker
 
 ## Deployment Notes
 
-Before exposing the Worker publicly, protect routes at the Cloudflare edge level:
+The Worker includes in-code fallback protection:
+
+- `/` is public and rate limited by `PUBLIC_RATE_LIMITER`.
+- `/lookup`, `/translate`, and `/daily` are rate limited by `API_RATE_LIMITER`.
+- `/lookup`, `/translate`, and `/daily` require `Authorization: Bearer <API_BEARER_TOKEN>` when the secret is configured.
+
+If a custom domain is added later, still protect routes at the Cloudflare edge level:
 
 - Home `/`: public with rate limiting.
 - Lookup and `/translate`: protected or rate-limited depending on how `irc-news` calls them.

@@ -16,5 +16,23 @@
       "id": "365cc46d67e64eb4be4755e25d6b9d57",
       "preview_id": "5b611d83e74b4b81bfa18767881d46df"
     }
+  ],
+  "ratelimits": [
+    {
+      "name": "PUBLIC_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "API_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
   ]
 }

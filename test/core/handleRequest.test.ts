@@ -7,7 +7,9 @@ import {
   FakeMediaProvider,
   MemoryLookupCachePort,
   MemoryMetricsPort,
+  MemoryRateLimiterPort,
   MemoryStoragePort,
+  testConfig,
 } from './helpers';
 
 describe('handleRequest', () => {
@@ -78,6 +80,72 @@ describe('handleRequest', () => {
       remoteId: '693134',
       posterPath: '/abc123.jpg',
     });
+  });
+
+  it('requires bearer authorization for API routes when configured', async () => {
+    const provider = new FakeMediaProvider();
+    const deps = createTestDeps({
+      config: {
+        ...testConfig,
+        apiBearerToken: 'api-secret',
+      },
+      provider,
+    });
+    const url = 'https://example.com/lookup?type=movie&title=Dune&year=2024&language=it-IT';
+
+    const unauthorized = await handleRequest(new Request(url), deps);
+    const authorized = await handleRequest(
+      new Request(url, {
+        headers: {
+          Authorization: 'Bearer api-secret',
+        },
+      }),
+      deps,
+    );
+
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers.get('WWW-Authenticate')).toBe('Bearer');
+    expect(authorized.status).toBe(200);
+    expect(provider.lookupCalls).toBe(1);
+  });
+
+  it('keeps the root page public when bearer authorization is configured', async () => {
+    const response = await handleRequest(
+      new Request('https://example.com/'),
+      createTestDeps({
+        config: {
+          ...testConfig,
+          apiBearerToken: 'api-secret',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it('returns 429 before expensive work when rate limited', async () => {
+    const provider = new FakeMediaProvider();
+    const rateLimiter = new MemoryRateLimiterPort();
+    rateLimiter.success = false;
+
+    const response = await handleRequest(
+      new Request('https://example.com/lookup?type=movie&title=Dune&language=it-IT', {
+        headers: {
+          'CF-Connecting-IP': '203.0.113.10',
+        },
+      }),
+      createTestDeps({ provider, rateLimiter }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('60');
+    expect(provider.lookupCalls).toBe(0);
+    expect(rateLimiter.calls).toEqual([
+      {
+        scope: 'api',
+        key: 'lookup:203.0.113.10',
+      },
+    ]);
   });
 
   it('returns 404 when metadata is not found', async () => {
