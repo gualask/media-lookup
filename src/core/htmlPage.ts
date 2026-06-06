@@ -9,10 +9,16 @@ const SECTIONS: readonly {
   source: DailySnapshotSource;
   label: string;
 }[] = [
-  { type: 'movie', source: 'trending', label: 'Film trending' },
-  { type: 'movie', source: 'popular', label: 'Film popolari' },
-  { type: 'tv', source: 'trending', label: 'Serie trending' },
-  { type: 'tv', source: 'popular', label: 'Serie popolari' },
+  {
+    type: 'movie',
+    source: 'movie_home_release_recent',
+    label: 'Film recenti streaming e home video',
+  },
+  { type: 'movie', source: 'movie_trending_recent', label: 'Film in tendenza recenti' },
+  { type: 'movie', source: 'movie_theatrical_recent', label: 'Film recenti al cinema' },
+  { type: 'movie', source: 'movie_theatrical_upcoming', label: 'Film in arrivo al cinema' },
+  { type: 'tv', source: 'tv_recent_episodes', label: 'Serie con episodi recenti' },
+  { type: 'tv', source: 'tv_upcoming_episodes', label: 'Serie con episodi in arrivo' },
 ];
 
 export function renderPreviewPage(snapshot: DailySnapshot | null): string {

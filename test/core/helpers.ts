@@ -101,7 +101,7 @@ export class FakeMediaProvider implements MediaProviderPort {
     return {
       generatedAt: params.now.toISOString(),
       language: params.language,
-      items: this.lookupResult ? [{ ...this.lookupResult, source: 'trending' }] : [],
+      items: this.lookupResult ? [{ ...this.lookupResult, source: 'movie_theatrical_recent' }] : [],
     };
   }
 }

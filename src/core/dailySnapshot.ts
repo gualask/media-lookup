@@ -2,8 +2,10 @@ import { lookupCacheKey } from './cacheKeys';
 import type { Deps } from './deps';
 import type { DailySnapshot, DailySnapshotItem, MediaMetadata } from './types';
 
+const DAILY_SNAPSHOT_TMDB_CALLS = 6;
+
 export function dailySnapshotKey(language: string): string {
-  return `daily:v1:${language}`;
+  return `daily:v4:${language}`;
 }
 
 export async function readDailySnapshot(
@@ -47,6 +49,7 @@ export async function ensureDailySnapshot(
   const snapshot = await deps.provider.buildDailySnapshot({
     language,
     now,
+    timeZone: deps.config.dailyRefreshTimeZone,
   });
 
   await deps.storage.putText(dailySnapshotKey(language), JSON.stringify(snapshot));
@@ -55,7 +58,7 @@ export async function ensureDailySnapshot(
     route: 'daily_refresh',
     cache: 'miss',
     provider: 'tmdb',
-    tmdbCalls: 4,
+    tmdbCalls: DAILY_SNAPSHOT_TMDB_CALLS,
     status: 'ok',
     mediaType: 'none',
     language,

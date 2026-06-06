@@ -2,7 +2,13 @@ export const CACHE_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 export type MediaType = 'movie' | 'tv';
 export type ProviderName = 'tmdb';
-export type DailySnapshotSource = 'trending' | 'popular';
+export type DailySnapshotSource =
+  | 'movie_trending_recent'
+  | 'movie_theatrical_recent'
+  | 'movie_home_release_recent'
+  | 'movie_theatrical_upcoming'
+  | 'tv_recent_episodes'
+  | 'tv_upcoming_episodes';
 
 export interface AppConfig {
   tmdbToken: string;
@@ -33,6 +39,7 @@ export interface OverviewTranslation {
 export interface DailySnapshotParams {
   language: string;
   now: Date;
+  timeZone: string;
 }
 
 export interface MediaMetadata {

@@ -12,7 +12,18 @@ import type {
 } from './types';
 
 const API_BASE_URL = 'https://api.themoviedb.org/3';
-const DAILY_LIMIT_PER_TYPE = 50;
+const DAILY_LIMIT_PER_SOURCE = 20;
+const MOVIE_TRENDING_PAST_DAYS = 180;
+const MOVIE_TRENDING_FUTURE_DAYS = 365;
+const MOVIE_RECENT_DAYS = 45;
+const MOVIE_HOME_RELEASE_DAYS = 120;
+const MOVIE_UPCOMING_DAYS = 45;
+const TV_RECENT_DAYS = 14;
+const TV_UPCOMING_DAYS = 14;
+const THEATRICAL_RELEASE_TYPES = '2|3';
+const HOME_RELEASE_TYPES = '4|5';
+const WATCH_MONETIZATION_TYPES = 'flatrate|rent|buy';
+const SCRIPTED_TV_TYPE = '4';
 
 interface TmdbSearchResponse<T> {
   results?: T[];
@@ -90,11 +101,69 @@ export class TmdbMediaProvider {
   }
 
   async buildDailySnapshot(params: DailySnapshotParams): Promise<DailySnapshot> {
-    const [trendingMovies, popularMovies, trendingTv, popularTv] = await Promise.all([
-      this.list<TmdbMovieResult>('/trending/movie/day', params.language),
-      this.list<TmdbMovieResult>('/movie/popular', params.language),
-      this.list<TmdbTvResult>('/trending/tv/day', params.language),
-      this.list<TmdbTvResult>('/tv/popular', params.language),
+    const today = dateKeyInTimeZone(params.now, params.timeZone);
+    const region = regionFromLanguage(params.language);
+    const movieListParams = {
+      language: params.language,
+      page: '1',
+    };
+    const movieBaseParams = {
+      ...movieListParams,
+      include_adult: 'false',
+      include_video: 'false',
+      sort_by: 'popularity.desc',
+      ...(region ? { region } : {}),
+    };
+    const tvBaseParams = {
+      language: params.language,
+      page: '1',
+      include_adult: 'false',
+      include_null_first_air_dates: 'false',
+      sort_by: 'popularity.desc',
+      timezone: params.timeZone,
+      with_type: SCRIPTED_TV_TYPE,
+    };
+    const trendingMovieStart = addDaysToDateKey(today, -MOVIE_TRENDING_PAST_DAYS);
+    const trendingMovieEnd = addDaysToDateKey(today, MOVIE_TRENDING_FUTURE_DAYS);
+    const [
+      trendingMovies,
+      recentTheatricalMovies,
+      recentHomeReleaseMovies,
+      upcomingTheatricalMovies,
+      recentTvEpisodes,
+      upcomingTvEpisodes,
+    ] = await Promise.all([
+      this.list<TmdbMovieResult>('/trending/movie/day', movieListParams),
+      this.list<TmdbMovieResult>('/discover/movie', {
+        ...movieBaseParams,
+        with_release_type: THEATRICAL_RELEASE_TYPES,
+        'release_date.gte': addDaysToDateKey(today, -MOVIE_RECENT_DAYS),
+        'release_date.lte': today,
+      }),
+      this.list<TmdbMovieResult>('/discover/movie', {
+        ...movieBaseParams,
+        with_release_type: HOME_RELEASE_TYPES,
+        with_watch_monetization_types: WATCH_MONETIZATION_TYPES,
+        ...(region ? { watch_region: region } : {}),
+        'release_date.gte': addDaysToDateKey(today, -MOVIE_HOME_RELEASE_DAYS),
+        'release_date.lte': today,
+      }),
+      this.list<TmdbMovieResult>('/discover/movie', {
+        ...movieBaseParams,
+        with_release_type: THEATRICAL_RELEASE_TYPES,
+        'release_date.gte': addDaysToDateKey(today, 1),
+        'release_date.lte': addDaysToDateKey(today, MOVIE_UPCOMING_DAYS),
+      }),
+      this.list<TmdbTvResult>('/discover/tv', {
+        ...tvBaseParams,
+        'air_date.gte': addDaysToDateKey(today, -TV_RECENT_DAYS),
+        'air_date.lte': today,
+      }),
+      this.list<TmdbTvResult>('/discover/tv', {
+        ...tvBaseParams,
+        'air_date.gte': addDaysToDateKey(today, 1),
+        'air_date.lte': addDaysToDateKey(today, TV_UPCOMING_DAYS),
+      }),
     ]);
 
     return {
@@ -102,22 +171,31 @@ export class TmdbMediaProvider {
       language: params.language,
       items: [
         ...dedupeAndLimit('movie', [
-          { source: 'trending', results: trendingMovies },
-          { source: 'popular', results: popularMovies },
+          { source: 'movie_home_release_recent', results: recentHomeReleaseMovies },
+          {
+            source: 'movie_trending_recent',
+            results: filterMoviesByReleaseWindow(
+              trendingMovies,
+              trendingMovieStart,
+              trendingMovieEnd,
+            ),
+          },
+          { source: 'movie_theatrical_recent', results: recentTheatricalMovies },
+          { source: 'movie_theatrical_upcoming', results: upcomingTheatricalMovies },
         ]),
         ...dedupeAndLimit('tv', [
-          { source: 'trending', results: trendingTv },
-          { source: 'popular', results: popularTv },
+          { source: 'tv_recent_episodes', results: recentTvEpisodes },
+          { source: 'tv_upcoming_episodes', results: upcomingTvEpisodes },
         ]),
       ],
     };
   }
 
-  private async list<T extends TmdbResult>(path: string, language: string): Promise<T[]> {
-    const response = await this.request<TmdbSearchResponse<T>>(path, {
-      language,
-      page: '1',
-    });
+  private async list<T extends TmdbResult>(
+    path: string,
+    params: Record<string, string>,
+  ): Promise<T[]> {
+    const response = await this.request<TmdbSearchResponse<T>>(path, params);
 
     return response.results ?? [];
   }
@@ -178,6 +256,8 @@ function dedupeAndLimit(
   const items = new Map<string, DailySnapshotItem>();
 
   for (const group of groups) {
+    let acceptedFromGroup = 0;
+
     for (const result of group.results) {
       const metadata =
         type === 'movie' ? mapMovie(result as TmdbMovieResult) : mapTv(result as TmdbTvResult);
@@ -190,16 +270,34 @@ function dedupeAndLimit(
         ...metadata,
         source: group.source,
       };
+      const itemKey = `${type}:${item.remoteId}`;
 
-      items.set(`${type}:${item.remoteId}`, item);
+      if (!items.has(itemKey)) {
+        items.set(itemKey, item);
+        acceptedFromGroup += 1;
+      }
 
-      if (items.size >= DAILY_LIMIT_PER_TYPE) {
-        return [...items.values()];
+      if (acceptedFromGroup >= DAILY_LIMIT_PER_SOURCE) {
+        break;
       }
     }
   }
 
   return [...items.values()];
+}
+
+function filterMoviesByReleaseWindow(
+  results: readonly TmdbMovieResult[],
+  startDate: string,
+  endDate: string,
+): TmdbMovieResult[] {
+  return results.filter((result) =>
+    isDateKeyInRange(result.release_date ?? '', startDate, endDate),
+  );
+}
+
+function isDateKeyInRange(dateKey: string, startDate: string, endDate: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) && dateKey >= startDate && dateKey <= endDate;
 }
 
 function hasLatinLetter(value: string): boolean {
@@ -251,4 +349,43 @@ function resultDate(result: TmdbResult, type: MediaType): string | undefined {
   return type === 'movie'
     ? (result as TmdbMovieResult).release_date
     : (result as TmdbTvResult).first_air_date;
+}
+
+function dateKeyInTimeZone(date: Date, timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).map((part) => [part.type, part.value]),
+  );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addDaysToDateKey(dateKey: string, days: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+
+  if (!match) {
+    return dateKey;
+  }
+
+  const [, yearText, monthText, dayText] = match;
+  if (!yearText || !monthText || !dayText) {
+    return dateKey;
+  }
+
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+
+  return shifted.toISOString().slice(0, 10);
+}
+
+function regionFromLanguage(language: string): string | undefined {
+  const match = /^[a-z]{2,3}-([a-z]{2})$/i.exec(language);
+  return match?.[1]?.toUpperCase();
 }
