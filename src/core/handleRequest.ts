@@ -3,12 +3,19 @@ import { ensureDailySnapshot, readDailySnapshot } from './dailySnapshot';
 import type { Deps } from './deps';
 import { ProviderConfigurationError, UpstreamProviderError } from './errors';
 import { renderPreviewPage } from './htmlPage';
-import { cacheHeaders, errorResponse, htmlResponse, jsonResponse } from './responses';
+import { cacheHeaders, errorResponse, htmlResponse, jsonResponse, svgResponse } from './responses';
 import { parseRoute } from './routes';
 import type { DailySnapshot, DailySnapshotItem, MediaMetadata, OverviewTranslation } from './types';
 
 const OVERVIEW_NOT_FOUND_TTL_SECONDS = 60 * 60 * 24;
 const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
+const FAVICON_CACHE_TTL_SECONDS = 60 * 60 * 24 * 365;
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#111318"/>
+  <circle cx="28" cy="28" r="15" fill="none" stroke="#8fb7ff" stroke-width="6"/>
+  <path d="M39 39L52 52" stroke="#8fb7ff" stroke-width="6" stroke-linecap="round"/>
+  <path d="M25 20L37 28L25 36Z" fill="#f4f5f7"/>
+</svg>`;
 
 type OverviewTranslationCacheEntry =
   | ({ status: 'found' } & OverviewTranslation)
@@ -35,6 +42,8 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
 
   try {
     switch (parsed.route.kind) {
+      case 'favicon':
+        return handleFavicon();
       case 'page':
         return await handlePage(deps);
       case 'lookup':
@@ -64,6 +73,10 @@ async function handlePage(deps: Deps): Promise<Response> {
   });
 
   return htmlResponse(renderPreviewPage(displaySnapshot));
+}
+
+function handleFavicon(): Response {
+  return svgResponse(FAVICON_SVG, { status: 200 }, cacheHeaders(FAVICON_CACHE_TTL_SECONDS));
 }
 
 async function handleLookup(
@@ -114,6 +127,10 @@ async function enforceRateLimit(
   deps: Deps,
   routeKind: Extract<ReturnType<typeof parseRoute>, { ok: true }>['route']['kind'],
 ): Promise<Response | null> {
+  if (routeKind === 'favicon') {
+    return null;
+  }
+
   const scope = routeKind === 'page' ? 'public' : 'api';
   const result = await deps.rateLimiter.limit({
     scope,
@@ -134,7 +151,7 @@ function enforceAuthorization(
   deps: Deps,
   routeKind: Extract<ReturnType<typeof parseRoute>, { ok: true }>['route']['kind'],
 ): Response | null {
-  if (routeKind === 'page' || !deps.config.apiBearerToken) {
+  if (routeKind === 'page' || routeKind === 'favicon' || !deps.config.apiBearerToken) {
     return null;
   }
 
