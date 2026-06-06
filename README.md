@@ -9,7 +9,7 @@ It is currently built for `irc-news`, but the HTTP contract is intentionally sma
 - TMDB movie and TV lookup by title, type, year, and language.
 - KV-backed lookup cache with 30 day TTL.
 - Lazy daily home snapshot used to warm the lookup cache.
-- Minimal HTML home page grouped by source: movie trending, movie popular, TV trending, TV popular.
+- Minimal HTML home page grouped by temporal source: recent/trending movie releases, home releases, upcoming theatrical movies, and scripted TV episodes.
 - Direct TMDB image CDN usage for posters. The Worker does not proxy poster bytes.
 - Lazy English overview fallback for items whose localized overview is empty.
 - Console-based structured metrics events, ready to be replaced by Analytics Engine later.
@@ -36,12 +36,20 @@ Serves the HTML preview page.
 
 The home page also performs the lazy daily refresh for the default language. If the daily snapshot for the current day already exists, it is served from KV without calling TMDB.
 
-The current daily sources are:
+The current daily sources are temporal and intentionally avoid generic `popular` lists:
 
-- `/trending/movie/day`
-- `/movie/popular`
-- `/trending/tv/day`
-- `/tv/popular`
+- Film recenti streaming e home video: `/discover/movie`, `release_date.gte=today-120`, `release_date.lte=today`, `with_release_type=4|5`, `watch_region=<region>`, `with_watch_monetization_types=flatrate|rent|buy`.
+- Film in tendenza recenti: `/trending/movie/day`, then local release-date filtering from `today-180` to `today+365`.
+- Film recenti al cinema: `/discover/movie`, `release_date.gte=today-45`, `release_date.lte=today`, `with_release_type=2|3`.
+- Film in arrivo al cinema: `/discover/movie`, `release_date.gte=today+1`, `release_date.lte=today+45`, `with_release_type=2|3`.
+- Serie con episodi recenti: `/discover/tv`, `air_date.gte=today-14`, `air_date.lte=today`, `with_type=4`.
+- Serie con episodi in arrivo: `/discover/tv`, `air_date.gte=today+1`, `air_date.lte=today+14`, `with_type=4`.
+
+Movie discovery uses the region inferred from the language tag, for example `it-IT` -> `IT`.
+
+Movie dedupe keeps the first matching source in this priority order: streaming/home video, trending recent, recent theatrical, upcoming theatrical.
+
+TV discovery uses `air_date`, not `first_air_date`, so a long-running series is included when it has recent or upcoming episodes. It also uses `with_type=4` to keep scripted shows and avoid talk shows, news, and reality-style daily programs.
 
 Daily snapshot items whose localized title contains no Latin letters are excluded from the home/warmup flow.
 
@@ -156,7 +164,7 @@ Example: `Dune - Parte due` and `Dune Parte Due` produce the same title key.
 Daily snapshot:
 
 ```text
-daily:v1:<language>
+daily:v4:<language>
 ```
 
 English overview fallback:
