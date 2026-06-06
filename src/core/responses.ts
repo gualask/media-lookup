@@ -35,6 +35,26 @@ export function htmlResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
+export function svgResponse(
+  body: string,
+  init: ResponseInit = {},
+  extraHeaders?: HeadersInit,
+): Response {
+  const headers = new Headers(init.headers);
+  headers.set('Content-Type', 'image/svg+xml; charset=utf-8');
+
+  if (extraHeaders) {
+    for (const [key, value] of new Headers(extraHeaders)) {
+      headers.set(key, value);
+    }
+  }
+
+  return new Response(body, {
+    ...init,
+    headers,
+  });
+}
+
 export function errorResponse(
   status: number,
   code: string,

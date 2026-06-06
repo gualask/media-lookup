@@ -20,11 +20,29 @@ describe('handleRequest', () => {
     expect(response.headers.get('Content-Type')).toContain('text/html');
     const html = await response.text();
     expect(html).toContain('media-lookup');
+    expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
     expect(html).toContain('https://image.tmdb.org/t/p/w185/abc123.jpg');
     expect(html).toContain(
       'https://www.youtube.com/results?search_query=Dune%20-%20Parte%20due%202024%20trailer%20italiano',
     );
     expect(html).not.toContain('posterPath=');
+  });
+
+  it('serves a cacheable favicon', async () => {
+    const response = await handleRequest(
+      new Request('https://example.com/favicon.svg'),
+      createTestDeps({
+        config: {
+          ...testConfig,
+          apiBearerToken: 'api-secret',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('image/svg+xml');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000');
+    expect(await response.text()).toContain('<svg');
   });
 
   it('renders a lazy overview recovery button when the overview is missing', async () => {

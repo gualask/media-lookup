@@ -9,6 +9,17 @@ describe('parseRoute', () => {
     expect(parsed).toEqual({ ok: true, route: { kind: 'page' } });
   });
 
+  it('routes favicon requests', () => {
+    expect(parseRoute(new Request('https://example.com/favicon.svg'), testConfig)).toEqual({
+      ok: true,
+      route: { kind: 'favicon' },
+    });
+    expect(parseRoute(new Request('https://example.com/favicon.ico'), testConfig)).toEqual({
+      ok: true,
+      route: { kind: 'favicon' },
+    });
+  });
+
   it('routes lookup requests and applies the default language', () => {
     const parsed = parseRoute(
       new Request('https://example.com/lookup?type=movie&title=Dune&year=2024'),

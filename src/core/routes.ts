@@ -3,6 +3,7 @@ import type { AppConfig, LookupParams, OverviewTranslationParams } from './types
 
 export type ParsedRoute =
   | { kind: 'page' }
+  | { kind: 'favicon' }
   | ({ kind: 'lookup' } & LookupParams)
   | ({ kind: 'translate' } & OverviewTranslationParams)
   | { kind: 'daily'; language: string };
@@ -34,6 +35,10 @@ export function parseRoute(request: Request, config: AppConfig): RouteParseResul
     }
 
     return badRequest('Root route does not accept query parameters');
+  }
+
+  if (url.pathname === '/favicon.svg' || url.pathname === '/favicon.ico') {
+    return { ok: true, route: { kind: 'favicon' } };
   }
 
   if (url.pathname === '/lookup') {
