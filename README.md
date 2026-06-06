@@ -1,21 +1,24 @@
 # media-lookup
 
-`media-lookup` is a Cloudflare Worker that provides movie and TV metadata without exposing the TMDB token to client applications.
+`media-lookup` is a Cloudflare Worker that provides movie and TV metadata for
+`irc-news` without exposing the TMDB token to browser clients.
 
-It is currently built for `irc-news`, but the HTTP contract is intentionally small and generic.
+The public home page is also used as a lazy warmup surface: visiting `/` builds
+the daily media snapshot once per day and writes lookup-compatible cache entries.
 
 ## Features
 
-- TMDB movie and TV lookup by title, type, year, and language.
-- KV-backed lookup cache with 30 day TTL.
-- Lazy daily home snapshot used to warm the lookup cache.
-- Minimal HTML home page grouped by temporal source: recent/trending movie releases, home releases, upcoming theatrical movies, and scripted TV episodes.
-- Direct TMDB image CDN usage for posters. The Worker does not proxy poster bytes.
-- Lazy English overview fallback for items whose localized overview is empty.
-- Bearer-protected API routes for `irc-news`.
+- TMDB movie and TV lookup by title, type, optional year, and language.
+- Lazy daily home snapshot for recent media discovery and lookup cache warmup.
+- Cloudflare KV-backed lookup cache with 30 day TTL.
+- Direct TMDB image CDN usage for posters. The Worker does not proxy poster
+  bytes.
+- Lazy English overview fallback through TMDB detail lookup, not machine
+  translation.
+- Bearer-protected API routes for server-side `irc-news` integration.
 - Worker Rate Limit bindings for public and API traffic.
 - Inline SVG favicon served by the Worker.
-- Console-based structured metrics events, ready to be replaced by Analytics Engine later.
+- Console-based structured metrics events.
 
 ## Stack
 
@@ -25,23 +28,41 @@ It is currently built for `irc-news`, but the HTTP contract is intentionally sma
 - Biome for format/lint.
 - Vitest for core tests.
 - `@cloudflare/vitest-pool-workers` for Worker runtime tests.
-- Cloudflare KV for daily snapshots, lookup cache, and overview fallback cache.
+- Cloudflare KV through the `DAILY_KV` binding.
 
-## HTTP Contract
-
-Current production URL:
+## Production URL
 
 ```text
 https://media-lookup.gualask-dev.workers.dev
 ```
 
-All API routes except `/` and `/favicon.*` require:
+## HTTP Contract
+
+Only `GET` is supported. Other methods return `405`.
+
+Public routes:
+
+- `GET /`
+- `GET /favicon.svg`
+- `GET /favicon.ico`
+
+API routes:
+
+- `GET /lookup`
+- `GET /translate`
+- `GET /daily`
+
+When `API_BEARER_TOKEN` is configured, every API route requires:
 
 ```http
 Authorization: Bearer <API_BEARER_TOKEN>
 ```
 
-Common API errors:
+Rate limiting runs before Bearer authorization. `/` uses the public rate limit
+scope, API routes use the API rate limit scope, and favicon routes bypass both
+rate limiting and authorization.
+
+Common API error shapes:
 
 ```http
 401
@@ -69,50 +90,107 @@ Common API errors:
 }
 ```
 
-### Home
+## Home
 
 ```http
 GET /
 ```
 
-Serves the HTML preview page.
+Serves the HTML preview page. The root route is public and does not accept query
+parameters. Requests such as `/?type=movie&title=Dune` return `400`.
 
-The root route is public and does not accept query parameters. Requests such as `/?type=movie&title=Dune` return `400`.
+The home page refreshes the default-language daily snapshot lazily. If the
+stored snapshot was generated on the current day in `DAILY_REFRESH_TIME_ZONE`,
+it is reused from KV and TMDB is not called. If it is missing or stale, the
+Worker calls TMDB, stores `daily:v4:<language>`, and warms lookup cache entries
+with the same keys used by `/lookup`.
 
-The home page also performs the lazy daily refresh for the default language. If the daily snapshot for the current day already exists, it is served from KV without calling TMDB.
+The rendered page:
 
-The current daily sources are temporal and intentionally avoid generic `popular` lists:
+- Shows `Media lookup`, item count, and `generatedAt` on the same header line.
+- Groups items by source section.
+- Uses direct TMDB poster URLs at size `w185`.
+- Links each item to a YouTube search for `<title> <year> trailer italiano`.
+- Shows the full localized overview in a fixed-height scrollable item body.
+- Renders `Recupera trama EN` for empty localized overviews.
 
-- Film recenti streaming e home video: `/discover/movie`, `release_date.gte=today-120`, `release_date.lte=today`, `with_release_type=4|5`, `watch_region=<region>`, `with_watch_monetization_types=flatrate|rent|buy`.
-- Film in tendenza recenti: `/trending/movie/day`, then local release-date filtering from `today-180` to `today+365`.
-- Film recenti al cinema: `/discover/movie`, `release_date.gte=today-45`, `release_date.lte=today`, `with_release_type=2|3`.
-- Film in arrivo al cinema: `/discover/movie`, `release_date.gte=today+1`, `release_date.lte=today+45`, `with_release_type=2|3`.
-- Serie con episodi recenti: `/discover/tv`, `air_date.gte=today-14`, `air_date.lte=today`, `with_type=4`.
-- Serie con episodi in arrivo: `/discover/tv`, `air_date.gte=today+1`, `air_date.lte=today+14`, `with_type=4`.
+The fallback button calls `/translate` from browser JavaScript without a Bearer
+token. In production, where `API_BEARER_TOKEN` is configured, that click cannot
+authorize itself and will fail with `401`. The protected `/translate` endpoint
+is still the intended server-side integration point for `irc-news`; if the
+fallback has already been cached by an authorized call, the home page hydrates it
+while rendering.
 
-Movie discovery uses the region inferred from the language tag, for example `it-IT` -> `IT`.
+### Daily Sources
 
-Movie dedupe keeps the first matching source in this priority order: streaming/home video, trending recent, recent theatrical, upcoming theatrical.
+The home snapshot uses these TMDB sources in display and dedupe priority order:
 
-TV discovery uses `air_date`, not `first_air_date`, so a long-running series is included when it has recent or upcoming episodes. It also uses `with_type=4` to keep scripted shows and avoid talk shows, news, and reality-style daily programs.
+1. Film recenti streaming e home video:
+   `/discover/movie`, `release_date.gte=today-120`,
+   `release_date.lte=today`, `with_release_type=4|5`,
+   `watch_region=<region>`,
+   `with_watch_monetization_types=flatrate|rent|buy`.
+2. Film in tendenza recenti:
+   `/trending/movie/day`, then local release-date filtering from `today-180` to
+   `today+365`.
+3. Film recenti al cinema:
+   `/discover/movie`, `release_date.gte=today-45`,
+   `release_date.lte=today`, `with_release_type=2|3`.
+4. Film in arrivo al cinema:
+   `/discover/movie`, `release_date.gte=today+1`,
+   `release_date.lte=today+45`, `with_release_type=2|3`.
+5. Serie con episodi recenti:
+   `/discover/tv`, `air_date.gte=today-14`, `air_date.lte=today`,
+   `with_type=4`.
+6. Serie con episodi in arrivo:
+   `/discover/tv`, `air_date.gte=today+1`, `air_date.lte=today+14`,
+   `with_type=4`.
 
-Daily snapshot items whose localized title contains no Latin letters are excluded from the home/warmup flow.
+Movie discovery uses `sort_by=popularity.desc`, `include_adult=false`,
+`include_video=false`, `page=1`, and the region inferred from the language tag,
+for example `it-IT` -> `IT`. The home-video source also sends `watch_region`.
 
-### Favicon
+TV discovery uses `air_date`, not `first_air_date`, so long-running series can
+appear when they have recent or upcoming episodes. It also sends
+`include_adult=false`, `include_null_first_air_dates=false`,
+`sort_by=popularity.desc`, `timezone=<DAILY_REFRESH_TIME_ZONE>`, and
+`with_type=4` for scripted shows.
+
+Daily snapshot items whose localized title contains no Latin letters are
+excluded from the home and warmup flow.
+
+The Worker accepts up to 20 new unique items per source. Movies are deduped by
+TMDB id in this priority order: streaming/home video, trending recent, recent
+theatrical, upcoming theatrical. TV items are deduped by TMDB id with recent
+episodes before upcoming episodes.
+
+## Favicon
 
 ```http
 GET /favicon.svg
 GET /favicon.ico
 ```
 
-Serves the same inline SVG favicon generated by the Worker. The home page links `/favicon.svg`; `/favicon.ico` exists as a browser fallback. Both responses are cacheable for one year.
+Both routes serve the same inline SVG favicon generated by the Worker. The home
+page links `/favicon.svg`; `/favicon.ico` exists as a browser fallback. Both
+responses are cacheable for one year.
 
-### Lookup
+## Lookup
 
 ```http
 GET /lookup?type=movie&title=Dune&year=2024&language=it-IT
 GET /lookup?type=tv&title=Breaking%20Bad&year=2008&language=it-IT
 ```
+
+Query parameters:
+
+- `type`: required, `movie` or `tv`.
+- `title`: required.
+- `year`: optional, four digits.
+- `language`: optional, defaults to `DEFAULT_LANGUAGE`.
+
+Unexpected query parameters return `400`. Unsupported languages return `400`.
+Missing metadata returns `404`.
 
 Response:
 
@@ -128,26 +206,30 @@ Response:
 }
 ```
 
-Not found:
+`posterPath` is a TMDB path, not a proxied media URL.
 
-```http
-404
-```
-
-Supported languages are configured through `SUPPORTED_LANGUAGES`. Missing `language` falls back to `DEFAULT_LANGUAGE`.
-
-Unexpected query parameters return `400`.
-
-### English Overview Fallback
+## English Overview Fallback
 
 ```http
 GET /translate?type=movie&id=693134&language=en-US
 GET /translate?type=tv&id=1399&language=en-US
 ```
 
-This endpoint is intentionally lazy. Clients should call it only after explicit user action when the localized `overview` is empty.
+This endpoint is intentionally lazy. Clients should call it only after explicit
+user action when the localized `overview` is empty.
 
-It does not perform machine translation. It asks TMDB for the media detail in the requested language, normally `en-US`.
+It does not perform machine translation. It asks TMDB for the media detail in
+the requested language, normally `en-US`, and returns a non-empty overview when
+TMDB has one.
+
+Query parameters:
+
+- `type`: required, `movie` or `tv`.
+- `id`: required TMDB numeric id.
+- `language`: optional, defaults to `DEFAULT_LANGUAGE`.
+
+Unexpected query parameters return `400`. Unsupported languages return `400`.
+Missing overview fallback returns `404`.
 
 Response:
 
@@ -158,37 +240,29 @@ Response:
 }
 ```
 
-Not found:
+Successful fallbacks are cached for 30 days. Missing fallbacks are cached for 1
+day.
 
-```http
-404
-```
-
-The home page uses this endpoint behind the `Recupera trama EN` button.
-
-When a fallback is already cached, the home page hydrates empty overviews from `overview_fallback` while rendering. The browser also stores successful click results in `localStorage`, so an immediate refresh keeps showing the recovered English overview even before KV propagation catches up.
-
-Unexpected query parameters return `400`.
-
-### Daily Snapshot Diagnostic
+## Daily Snapshot Diagnostic
 
 ```http
 GET /daily?language=it-IT
 ```
 
-Returns the currently stored daily snapshot. This endpoint is read-only: it does not generate a snapshot by itself.
+Returns the currently stored daily snapshot. This endpoint is read-only: it does
+not generate a snapshot by itself.
 
-If no snapshot exists:
+Query parameters:
 
-```http
-404
-```
+- `language`: optional, defaults to `DEFAULT_LANGUAGE`.
 
-Unexpected query parameters return `400`.
+Unexpected query parameters return `400`. Unsupported languages return `400`.
+If no snapshot exists, the endpoint returns `404`.
 
 ## Poster Handling
 
-The Worker returns only `posterPath`. Clients should build TMDB image CDN URLs directly:
+The Worker returns only `posterPath`. Clients should build TMDB image CDN URLs
+directly:
 
 ```text
 https://image.tmdb.org/t/p/w185/<posterPath-without-leading-slash>
@@ -200,11 +274,12 @@ Recommended sizes:
 - `w342` or `w500` only for larger views.
 - Avoid `original` by default.
 
-If `irc-news` wants local filesystem caching, it should cache the final CDN size it actually displays.
+If `irc-news` wants local filesystem caching, it should cache the final CDN size
+it actually displays.
 
 ## Cache
 
-All application cache lives in Cloudflare KV through the `DAILY_KV` binding.
+All application cache lives in Cloudflare KV through `DAILY_KV`.
 
 Lookup metadata:
 
@@ -214,18 +289,23 @@ lookup:v1:<language>:<type>:<normalized-title>:<year-or-none>
 
 Title normalization is shared by runtime lookup and daily warmup:
 
+- trim
 - lowercase
 - accents removed
+- punctuation and other non-letter/non-number characters treated as separators
 - repeated whitespace collapsed
-- punctuation treated as separators
+- normalized title URI-encoded inside the key
 
-Example: `Dune - Parte due` and `Dune Parte Due` produce the same title key.
+Example: `Dune - Parte due` and `Dune Parte Due` produce the same title segment.
 
 Daily snapshot:
 
 ```text
 daily:v4:<language>
 ```
+
+The daily snapshot is stored without a KV expiration TTL. Freshness is decided
+by comparing `generatedAt` with the current date in `DAILY_REFRESH_TIME_ZONE`.
 
 English overview fallback:
 
@@ -238,11 +318,45 @@ TTL:
 - lookup metadata: 30 days
 - overview fallback success: 30 days
 - overview fallback not found: 1 day
-- daily snapshot: one current snapshot per language, refreshed lazily by date
+- daily snapshot: refreshed lazily by date
+
+## Metrics
+
+Metrics currently use `ConsoleMetricsPort`, which writes one JSON object per
+event with:
+
+```text
+route, cache, provider, tmdbCalls, status, mediaType, language
+```
+
+Current route values:
+
+- `page`
+- `daily_refresh`
+- `lookup`
+- `translate`
+- `daily`
+
+Cache values:
+
+- `hit`
+- `miss`
+- `bypass`
+
+Current behavior:
+
+- `/` records `page` with `cache=hit` when the daily snapshot is reused.
+- `/` records `page` with `cache=miss` when it triggered a refresh.
+- A refresh also records `daily_refresh` with `tmdbCalls=6`.
+- `/lookup` and `/translate` record `hit` or `miss`.
+- `/daily` records `bypass`.
+
+Parse errors, authorization failures, rate-limit failures, and favicon requests
+do not currently emit metrics events.
 
 ## irc-news Integration
 
-Use lookup first:
+Use lookup first from server-side code:
 
 ```text
 <WORKER_URL>/lookup?type=movie|tv&title=<title>&language=<language>&year=<optional>
@@ -254,25 +368,25 @@ Protected API routes require:
 Authorization: Bearer <API_BEARER_TOKEN>
 ```
 
-The current production base URL is:
-
-```text
-https://media-lookup.gualask-dev.workers.dev
-```
-
 Use the returned `posterPath` to build a direct TMDB CDN image URL.
 
-If `overview` is empty, show a user-triggered action and call:
+If `overview` is empty, expose a user-triggered action in `irc-news` and call:
 
 ```text
 <WORKER_URL>/translate?type=<movie|tv>&id=<remoteId>&language=en-US
 ```
 
-Do not prefetch English fallbacks for every item. The endpoint is designed for explicit clicks so we do not waste TMDB calls on titles the user never opens.
+Do not prefetch English fallbacks for every item. The endpoint is designed for
+explicit clicks so TMDB calls are not spent on titles the user never opens.
+
+If `irc-news` persists movie or TV metadata, it should store the recovered
+English overview after a successful fallback call. Future plain `/lookup`
+responses can still have an empty localized overview, because `/lookup` returns
+the localized TMDB search result and does not merge fallback cache entries.
 
 ## Configuration
 
-Cloudflare secret:
+Cloudflare secrets:
 
 ```text
 TMDB_TOKEN
@@ -282,11 +396,16 @@ API_BEARER_TOKEN
 Set them with:
 
 ```sh
-wrangler secret put TMDB_TOKEN
-wrangler secret put API_BEARER_TOKEN
+pnpm exec wrangler secret put TMDB_TOKEN
+pnpm exec wrangler secret put API_BEARER_TOKEN
 ```
 
-`TMDB_TOKEN` is only used server-side by this Worker. `API_BEARER_TOKEN` is shared with server-side `irc-news` calls and must never be exposed in browser code.
+`TMDB_TOKEN` is only used server-side by this Worker. `API_BEARER_TOKEN` is
+shared with server-side `irc-news` calls and must never be exposed in browser
+code.
+
+If `API_BEARER_TOKEN` is missing, the code intentionally skips API
+authorization. Production should configure it.
 
 Local development uses `.dev.vars`, which must not be committed:
 
@@ -305,7 +424,7 @@ workers_dev=true
 preview_urls=true
 ```
 
-Required binding:
+Required bindings:
 
 ```text
 DAILY_KV
@@ -313,12 +432,14 @@ PUBLIC_RATE_LIMITER
 API_RATE_LIMITER
 ```
 
-`PUBLIC_RATE_LIMITER` protects the public home page with a small per-IP fallback limit. `API_RATE_LIMITER` protects `/lookup`, `/translate`, and `/daily`. These limits run inside the Worker, so they do not replace WAF/rate limiting rules on a Cloudflare zone, but they remain useful as a second layer even when a custom domain is added later.
-
 Configured limits:
 
 - `PUBLIC_RATE_LIMITER`: 30 requests per 60 seconds.
 - `API_RATE_LIMITER`: 120 requests per 60 seconds.
+
+These limits run inside the Worker. They do not replace WAF or rate limiting
+rules on a Cloudflare zone, but they remain useful as a second layer if a custom
+domain is added later.
 
 ## Secret Hygiene
 
@@ -328,7 +449,9 @@ This repository is public. Real secret values must exist only in:
 - Cloudflare Worker secrets.
 - `irc-news` server-side environment for `API_BEARER_TOKEN`.
 
-Never commit `.dev.vars`, `.env`, copied tokens, request examples with real bearer values, or TMDB tokens. If a token is committed publicly, rotate it immediately with `wrangler secret put`.
+Never commit `.dev.vars`, `.env`, copied tokens, request examples with real
+bearer values, or TMDB tokens. If a token is committed publicly, rotate it
+immediately with `pnpm exec wrangler secret put`.
 
 ## Local Development
 
@@ -338,13 +461,16 @@ Install dependencies:
 pnpm install
 ```
 
-Create `.dev.vars` from `.dev.vars.example` and set both `TMDB_TOKEN` and `API_BEARER_TOKEN`.
+Create `.dev.vars` from `.dev.vars.example` and set both `TMDB_TOKEN` and
+`API_BEARER_TOKEN`.
 
 Start the Worker locally:
 
 ```sh
 pnpm dev
 ```
+
+Wrangler prints the actual local URL when it starts.
 
 Useful local URLs:
 
@@ -355,9 +481,8 @@ Useful local URLs:
 <WRANGLER_LOCAL_URL>/daily?language=it-IT
 ```
 
-Wrangler prints the actual local URL when it starts.
-
-For protected API routes:
+For protected API routes, export or paste the local `API_BEARER_TOKEN` value
+before using `curl`:
 
 ```sh
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
@@ -379,17 +504,20 @@ The Worker includes in-code fallback protection:
 
 - `/` is public and rate limited by `PUBLIC_RATE_LIMITER`.
 - `/lookup`, `/translate`, and `/daily` are rate limited by `API_RATE_LIMITER`.
-- `/lookup`, `/translate`, and `/daily` require `Authorization: Bearer <API_BEARER_TOKEN>` when the secret is configured.
+- `/lookup`, `/translate`, and `/daily` require
+  `Authorization: Bearer <API_BEARER_TOKEN>` when the secret is configured.
+- `/favicon.svg` and `/favicon.ico` bypass rate limiting and authorization.
 
-If a custom domain is added later, still protect routes at the Cloudflare edge level:
+In-code authorization still counts as a Worker invocation. Abuse protection that
+should avoid Worker credit consumption needs to happen before the Worker, for
+example with Cloudflare WAF, Access, or rate limiting rules on a Cloudflare zone.
+
+If a custom domain is added later, protect routes at the Cloudflare edge level:
 
 - Home `/`: public with rate limiting.
-- Lookup and `/translate`: protected or rate-limited depending on how `irc-news` calls them.
-- `/daily`: diagnostic endpoint, should be protected.
-
-Lookup uses the dedicated `/lookup` route so Cloudflare edge policies can distinguish it from the public home page with simple path-based rules.
-
-In-code authorization still counts as a Worker invocation. Abuse protection that should avoid Worker credit consumption needs to happen before the Worker, for example with Cloudflare WAF, Access, or rate limiting rules.
+- `/lookup` and `/translate`: protected or rate-limited depending on how
+  `irc-news` calls them.
+- `/daily`: diagnostic endpoint, should stay protected.
 
 Deploy:
 
