@@ -32,7 +32,7 @@ export function renderPreviewPage(snapshot: DailySnapshot | null): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <title>media-lookup</title>
+  <title>Media lookup</title>
   <style>
     :root {
       color-scheme: light dark;

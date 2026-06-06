@@ -19,7 +19,7 @@ describe('handleRequest', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toContain('text/html');
     const html = await response.text();
-    expect(html).toContain('media-lookup');
+    expect(html).toContain('<title>Media lookup</title>');
     expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
     expect(html).toContain('https://image.tmdb.org/t/p/w185/abc123.jpg');
     expect(html).toContain(
