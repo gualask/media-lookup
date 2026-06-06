@@ -12,6 +12,7 @@ export type DailySnapshotSource =
 
 export interface AppConfig {
   tmdbToken: string;
+  apiBearerToken: string;
   defaultLanguage: string;
   supportedLanguages: readonly string[];
   cacheTtlSeconds: number;

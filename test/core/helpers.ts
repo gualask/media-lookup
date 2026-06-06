@@ -10,10 +10,16 @@ import {
 import type { LookupCachePort } from '../../src/ports/lookupCache';
 import type { MediaProviderPort } from '../../src/ports/mediaProvider';
 import type { MetricsEvent, MetricsPort } from '../../src/ports/metrics';
+import type {
+  RateLimiterPort,
+  RateLimitParams,
+  RateLimitResult,
+} from '../../src/ports/rateLimiter';
 import type { StoragePort } from '../../src/ports/storage';
 
 export const testConfig: AppConfig = {
   tmdbToken: 'test-token',
+  apiBearerToken: '',
   defaultLanguage: 'it-IT',
   supportedLanguages: ['it-IT', 'en-US'],
   cacheTtlSeconds: CACHE_TTL_SECONDS,
@@ -26,6 +32,7 @@ export function createTestDeps(overrides: Partial<Deps> = {}): Deps {
     lookupCache: new MemoryLookupCachePort(),
     storage: new MemoryStoragePort(),
     metrics: new MemoryMetricsPort(),
+    rateLimiter: new MemoryRateLimiterPort(),
     provider: new FakeMediaProvider(),
     now: () => new Date('2026-06-03T00:00:00.000Z'),
     ...overrides,
@@ -65,6 +72,16 @@ export class MemoryMetricsPort implements MetricsPort {
 
   record(event: MetricsEvent): void {
     this.events.push(event);
+  }
+}
+
+export class MemoryRateLimiterPort implements RateLimiterPort {
+  success = true;
+  readonly calls: RateLimitParams[] = [];
+
+  limit(params: RateLimitParams): Promise<RateLimitResult> {
+    this.calls.push(params);
+    return Promise.resolve({ success: this.success });
   }
 }
 

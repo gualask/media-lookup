@@ -8,6 +8,7 @@ import { parseRoute } from './routes';
 import type { DailySnapshot, DailySnapshotItem, MediaMetadata, OverviewTranslation } from './types';
 
 const OVERVIEW_NOT_FOUND_TTL_SECONDS = 60 * 60 * 24;
+const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 
 type OverviewTranslationCacheEntry =
   | ({ status: 'found' } & OverviewTranslation)
@@ -18,6 +19,18 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
 
   if (!parsed.ok) {
     return parsed.response;
+  }
+
+  const rateLimit = await enforceRateLimit(request, deps, parsed.route.kind);
+
+  if (rateLimit) {
+    return rateLimit;
+  }
+
+  const authorization = enforceAuthorization(request, deps, parsed.route.kind);
+
+  if (authorization) {
+    return authorization;
   }
 
   try {
@@ -94,6 +107,60 @@ async function handleLookup(
   });
 
   return response;
+}
+
+async function enforceRateLimit(
+  request: Request,
+  deps: Deps,
+  routeKind: Extract<ReturnType<typeof parseRoute>, { ok: true }>['route']['kind'],
+): Promise<Response | null> {
+  const scope = routeKind === 'page' ? 'public' : 'api';
+  const result = await deps.rateLimiter.limit({
+    scope,
+    key: rateLimitKey(request, routeKind),
+  });
+
+  if (result.success) {
+    return null;
+  }
+
+  return errorResponse(429, 'rate_limited', 'Rate limit exceeded', {
+    'Retry-After': RATE_LIMIT_RETRY_AFTER_SECONDS.toString(),
+  });
+}
+
+function enforceAuthorization(
+  request: Request,
+  deps: Deps,
+  routeKind: Extract<ReturnType<typeof parseRoute>, { ok: true }>['route']['kind'],
+): Response | null {
+  if (routeKind === 'page' || !deps.config.apiBearerToken) {
+    return null;
+  }
+
+  if (bearerToken(request) === deps.config.apiBearerToken) {
+    return null;
+  }
+
+  return errorResponse(401, 'unauthorized', 'Missing or invalid bearer token', {
+    'WWW-Authenticate': 'Bearer',
+  });
+}
+
+function bearerToken(request: Request): string | null {
+  const authorization = request.headers.get('Authorization');
+  const match = /^Bearer\s+(.+)$/i.exec(authorization ?? '');
+
+  return match?.[1]?.trim() || null;
+}
+
+function rateLimitKey(
+  request: Request,
+  routeKind: Extract<ReturnType<typeof parseRoute>, { ok: true }>['route']['kind'],
+): string {
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+
+  return `${routeKind}:${ip}`;
 }
 
 async function handleTranslate(
