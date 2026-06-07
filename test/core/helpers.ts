@@ -7,7 +7,7 @@ import {
   type MediaMetadata,
   type OverviewTranslation,
 } from '../../src/core/types';
-import type { LookupCachePort } from '../../src/ports/lookupCache';
+import type { LookupCacheEntry, LookupCachePort } from '../../src/ports/lookupCache';
 import type { MediaProviderPort } from '../../src/ports/mediaProvider';
 import type { MetricsEvent, MetricsPort } from '../../src/ports/metrics';
 import type {
@@ -40,14 +40,14 @@ export function createTestDeps(overrides: Partial<Deps> = {}): Deps {
 }
 
 export class MemoryLookupCachePort implements LookupCachePort {
-  readonly entries = new Map<string, MediaMetadata>();
+  readonly entries = new Map<string, LookupCacheEntry>();
 
-  get(key: string): Promise<MediaMetadata | null> {
+  get(key: string): Promise<LookupCacheEntry | null> {
     return Promise.resolve(this.entries.get(key) ?? null);
   }
 
-  put(key: string, metadata: MediaMetadata): Promise<void> {
-    this.entries.set(key, metadata);
+  put(key: string, entry: LookupCacheEntry): Promise<void> {
+    this.entries.set(key, entry);
     return Promise.resolve();
   }
 }
@@ -87,6 +87,7 @@ export class MemoryRateLimiterPort implements RateLimiterPort {
 
 export class FakeMediaProvider implements MediaProviderPort {
   lookupCalls = 0;
+  readonly lookupResults = new Map<string, MediaMetadata | null>();
   translationCalls = 0;
   snapshotCalls = 0;
   lookupResult: MediaMetadata | null = {
@@ -103,8 +104,11 @@ export class FakeMediaProvider implements MediaProviderPort {
     language: 'en-US',
   };
 
-  async lookup() {
+  async lookup(params: { title: string }) {
     this.lookupCalls += 1;
+    if (this.lookupResults.has(params.title)) {
+      return this.lookupResults.get(params.title) ?? null;
+    }
     return this.lookupResult;
   }
 

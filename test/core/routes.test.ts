@@ -38,6 +38,31 @@ describe('parseRoute', () => {
     });
   });
 
+  it('routes lookup batch POST requests', () => {
+    const parsed = parseRoute(
+      new Request('https://example.com/lookup/batch', { method: 'POST' }),
+      testConfig,
+    );
+
+    expect(parsed).toEqual({
+      ok: true,
+      route: {
+        kind: 'lookup_batch',
+      },
+    });
+  });
+
+  it('rejects lookup batch GET requests', async () => {
+    const parsed = parseRoute(new Request('https://example.com/lookup/batch'), testConfig);
+
+    expect(parsed.ok).toBe(false);
+
+    if (!parsed.ok) {
+      expect(parsed.response.status).toBe(405);
+      expect(parsed.response.headers.get('Allow')).toBe('POST');
+    }
+  });
+
   it('rejects unsupported languages', async () => {
     const parsed = parseRoute(
       new Request('https://example.com/lookup?type=movie&title=Dune&language=fr-FR'),

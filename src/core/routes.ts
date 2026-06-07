@@ -5,6 +5,7 @@ export type ParsedRoute =
   | { kind: 'page' }
   | { kind: 'favicon' }
   | ({ kind: 'lookup' } & LookupParams)
+  | { kind: 'lookup_batch' }
   | ({ kind: 'translate' } & OverviewTranslationParams)
   | { kind: 'daily'; language: string };
 
@@ -23,11 +24,23 @@ const TRANSLATE_PARAMS = new Set(['type', 'id', 'language']);
 const DAILY_PARAMS = new Set(['language']);
 
 export function parseRoute(request: Request, config: AppConfig): RouteParseResult {
+  const url = new URL(request.url);
+
+  if (url.pathname === '/lookup/batch') {
+    if (request.method !== 'POST') {
+      return { ok: false, response: methodNotAllowed(['POST']) };
+    }
+
+    if (url.search) {
+      return badRequest('Lookup batch route does not accept query parameters');
+    }
+
+    return { ok: true, route: { kind: 'lookup_batch' } };
+  }
+
   if (request.method !== 'GET') {
     return { ok: false, response: methodNotAllowed(['GET']) };
   }
-
-  const url = new URL(request.url);
 
   if (url.pathname === '/') {
     if (!url.search) {

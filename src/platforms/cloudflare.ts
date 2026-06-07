@@ -1,7 +1,7 @@
 import type { Deps } from '../core/deps';
 import { TmdbMediaProvider } from '../core/tmdbClient';
 import { type AppConfig, CACHE_TTL_SECONDS, type MediaMetadata } from '../core/types';
-import type { LookupCachePort } from '../ports/lookupCache';
+import type { LookupCacheEntry, LookupCachePort } from '../ports/lookupCache';
 import type { MetricsEvent, MetricsPort } from '../ports/metrics';
 import type { RateLimiterPort, RateLimitScope } from '../ports/rateLimiter';
 import type { StoragePort, StoragePutOptions } from '../ports/storage';
@@ -73,7 +73,7 @@ class CloudflareKvStorage implements StoragePort {
 class CloudflareKvLookupCache implements LookupCachePort {
   constructor(private readonly kv: KVNamespace) {}
 
-  async get(key: string): Promise<MediaMetadata | null> {
+  async get(key: string): Promise<LookupCacheEntry | null> {
     const value = await this.kv.get(key);
 
     if (!value) {
@@ -81,14 +81,36 @@ class CloudflareKvLookupCache implements LookupCachePort {
     }
 
     const parsed = JSON.parse(value) as unknown;
-    return isMediaMetadata(parsed) ? parsed : null;
+    return lookupCacheEntry(parsed);
   }
 
-  put(key: string, metadata: MediaMetadata, ttlSeconds: number): Promise<void> {
-    return this.kv.put(key, JSON.stringify(metadata), {
+  put(key: string, entry: LookupCacheEntry, ttlSeconds: number): Promise<void> {
+    return this.kv.put(key, JSON.stringify(entry), {
       expirationTtl: ttlSeconds,
     });
   }
+}
+
+function lookupCacheEntry(value: unknown): LookupCacheEntry | null {
+  if (isMediaMetadata(value)) {
+    return { status: 'found', metadata: value };
+  }
+
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Partial<LookupCacheEntry>;
+
+  if (candidate.status === 'not_found') {
+    return { status: 'not_found' };
+  }
+
+  if (candidate.status === 'found' && isMediaMetadata(candidate.metadata)) {
+    return { status: 'found', metadata: candidate.metadata };
+  }
+
+  return null;
 }
 
 function isMediaMetadata(value: unknown): value is MediaMetadata {

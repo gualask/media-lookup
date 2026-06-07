@@ -1,6 +1,12 @@
 import type { MediaType } from '../core/types';
 
-export type MetricsRoute = 'lookup' | 'translate' | 'daily' | 'page' | 'daily_refresh';
+export type MetricsRoute =
+  | 'lookup'
+  | 'lookup_batch'
+  | 'translate'
+  | 'daily'
+  | 'page'
+  | 'daily_refresh';
 export type MetricsCache = 'hit' | 'miss' | 'bypass';
 export type MetricsStatus = 'ok' | 'error' | 'not_found';
 
