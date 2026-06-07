@@ -100,6 +100,58 @@ describe('handleRequest', () => {
     });
   });
 
+  it('returns lookup batch results and caches found and not found entries', async () => {
+    const provider = new FakeMediaProvider();
+    provider.lookupResults.set('Missing', null);
+    const lookupCache = new MemoryLookupCachePort();
+    const deps = createTestDeps({ lookupCache, provider });
+    const request = () =>
+      new Request('https://example.com/lookup/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          items: [
+            { type: 'movie', title: 'Dune', year: 2024, language: 'it-IT' },
+            { type: 'movie', title: 'Missing', language: 'it-IT' },
+          ],
+        }),
+      });
+
+    const first = await handleRequest(request(), deps);
+    const second = await handleRequest(request(), deps);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(provider.lookupCalls).toBe(2);
+    await expect(first.json()).resolves.toMatchObject({
+      results: [
+        {
+          index: 0,
+          status: 'found',
+          metadata: {
+            provider: 'tmdb',
+            remoteId: '693134',
+          },
+        },
+        {
+          index: 1,
+          status: 'not_found',
+        },
+      ],
+    });
+    expect(
+      lookupCache.entries.get(
+        lookupCacheKey({
+          type: 'movie',
+          title: 'Missing',
+          language: 'it-IT',
+        }),
+      ),
+    ).toEqual({ status: 'not_found' });
+  });
+
   it('requires bearer authorization for API routes when configured', async () => {
     const provider = new FakeMediaProvider();
     const deps = createTestDeps({

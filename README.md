@@ -10,7 +10,8 @@ the daily media snapshot once per day and writes lookup-compatible cache entries
 
 - TMDB movie and TV lookup by title, type, optional year, and language.
 - Lazy daily home snapshot for recent media discovery and lookup cache warmup.
-- Cloudflare KV-backed lookup cache with 30 day TTL.
+- Cloudflare KV-backed lookup cache with 30 day TTL for found results and 1
+  day TTL for misses.
 - Direct TMDB image CDN usage for posters. The Worker does not proxy poster
   bytes.
 - Lazy English overview fallback through TMDB detail lookup, not machine
@@ -38,7 +39,8 @@ https://media-lookup.gualask-dev.workers.dev
 
 ## HTTP Contract
 
-Only `GET` is supported. Other methods return `405`.
+`GET` is supported for public/read routes. Lookup batch uses `POST`. Other
+methods return `405`.
 
 Public routes:
 
@@ -49,6 +51,7 @@ Public routes:
 API routes:
 
 - `GET /lookup`
+- `POST /lookup/batch`
 - `GET /translate`
 - `GET /daily`
 
@@ -208,6 +211,60 @@ Response:
 
 `posterPath` is a TMDB path, not a proxied media URL.
 
+## Lookup Batch
+
+```http
+POST /lookup/batch
+Content-Type: application/json
+Authorization: Bearer <API_BEARER_TOKEN>
+```
+
+Request:
+
+```json
+{
+  "items": [
+    { "type": "movie", "title": "Dune", "year": 2024, "language": "it-IT" },
+    { "type": "tv", "title": "Breaking Bad", "year": 2008, "language": "it-IT" }
+  ]
+}
+```
+
+Rules:
+
+- `items` is required and cannot be empty.
+- Maximum batch size is 10 items.
+- Each item uses the same fields as `/lookup`.
+- In JSON, `year` must be a four digit number, not a string.
+- Internal provider concurrency is capped at 3.
+- Results are returned item-by-item and keep the original input index.
+
+Response:
+
+```json
+{
+  "results": [
+    {
+      "index": 0,
+      "status": "found",
+      "metadata": {
+        "type": "movie",
+        "provider": "tmdb",
+        "remoteId": "693134",
+        "title": "Dune - Parte due",
+        "year": 2024,
+        "overview": "Trama localizzata se disponibile",
+        "posterPath": "/abc123.jpg"
+      }
+    },
+    { "index": 1, "status": "not_found" }
+  ]
+}
+```
+
+The batch route exists to reduce Worker request bursts from desktop clients. It
+does not merge multiple TMDB searches into one upstream TMDB API call.
+
 ## English Overview Fallback
 
 ```http
@@ -313,9 +370,13 @@ English overview fallback:
 overview_fallback:v1:<language>:<type>:<remoteId>
 ```
 
+Lookup cache entries store either a found metadata result or a short negative
+`not_found` entry.
+
 TTL:
 
 - lookup metadata: 30 days
+- lookup not found: 1 day
 - overview fallback success: 30 days
 - overview fallback not found: 1 day
 - daily snapshot: refreshed lazily by date
@@ -334,6 +395,7 @@ Current route values:
 - `page`
 - `daily_refresh`
 - `lookup`
+- `lookup_batch`
 - `translate`
 - `daily`
 
@@ -348,7 +410,7 @@ Current behavior:
 - `/` records `page` with `cache=hit` when the daily snapshot is reused.
 - `/` records `page` with `cache=miss` when it triggered a refresh.
 - A refresh also records `daily_refresh` with `tmdbCalls=6`.
-- `/lookup` and `/translate` record `hit` or `miss`.
+- `/lookup`, `/lookup/batch`, and `/translate` record `hit` or `miss`.
 - `/daily` records `bypass`.
 
 Parse errors, authorization failures, rate-limit failures, and favicon requests
@@ -361,6 +423,14 @@ Use lookup first from server-side code:
 ```text
 <WORKER_URL>/lookup?type=movie|tv&title=<title>&language=<language>&year=<optional>
 ```
+
+For desktop batch hydration, prefer:
+
+```text
+<WORKER_URL>/lookup/batch
+```
+
+with up to 10 items per request.
 
 Protected API routes require:
 
@@ -489,6 +559,15 @@ curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
   "<WRANGLER_LOCAL_URL>/lookup?type=movie&title=Dune&year=2024&language=it-IT"
 ```
 
+Batch example:
+
+```sh
+curl -X POST "<WRANGLER_LOCAL_URL>/lookup/batch" \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"type":"movie","title":"Dune","year":2024,"language":"it-IT"}]}'
+```
+
 Quality checks:
 
 ```sh
@@ -503,8 +582,8 @@ pnpm test:worker
 The Worker includes in-code fallback protection:
 
 - `/` is public and rate limited by `PUBLIC_RATE_LIMITER`.
-- `/lookup`, `/translate`, and `/daily` are rate limited by `API_RATE_LIMITER`.
-- `/lookup`, `/translate`, and `/daily` require
+- `/lookup`, `/lookup/batch`, `/translate`, and `/daily` are rate limited by `API_RATE_LIMITER`.
+- `/lookup`, `/lookup/batch`, `/translate`, and `/daily` require
   `Authorization: Bearer <API_BEARER_TOKEN>` when the secret is configured.
 - `/favicon.svg` and `/favicon.ico` bypass rate limiting and authorization.
 
@@ -515,7 +594,7 @@ example with Cloudflare WAF, Access, or rate limiting rules on a Cloudflare zone
 If a custom domain is added later, protect routes at the Cloudflare edge level:
 
 - Home `/`: public with rate limiting.
-- `/lookup` and `/translate`: protected or rate-limited depending on how
+- `/lookup`, `/lookup/batch`, and `/translate`: protected or rate-limited depending on how
   `irc-news` calls them.
 - `/daily`: diagnostic endpoint, should stay protected.
 

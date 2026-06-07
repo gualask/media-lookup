@@ -92,7 +92,11 @@ async function putLookupCacheItem(
   });
 
   try {
-    await deps.lookupCache.put(cacheKey, snapshotItemToMetadata(item), deps.config.cacheTtlSeconds);
+    await deps.lookupCache.put(
+      cacheKey,
+      { status: 'found', metadata: snapshotItemToMetadata(item) },
+      deps.config.cacheTtlSeconds,
+    );
   } catch (error) {
     console.warn('Lookup cache warmup failed', error);
   }
