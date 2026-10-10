@@ -1,6 +1,6 @@
 import type { Deps } from '../core/deps';
 import { TmdbMediaProvider } from '../core/tmdbClient';
-import { type AppConfig, CACHE_TTL_SECONDS, type MediaMetadata } from '../core/types';
+import { type AppConfig, CACHE_TTL_SECONDS, type LookupMetadata } from '../core/types';
 import type { LookupCacheEntry, LookupCacheOrigin, LookupCachePort } from '../ports/lookupCache';
 import type { MetricsEvent, MetricsPort } from '../ports/metrics';
 import type { RateLimiterPort, RateLimitScope } from '../ports/rateLimiter';
@@ -92,10 +92,6 @@ class CloudflareKvLookupCache implements LookupCachePort {
 }
 
 function lookupCacheEntry(value: unknown): LookupCacheEntry | null {
-  if (isMediaMetadata(value)) {
-    return { status: 'found', metadata: value };
-  }
-
   if (!value || typeof value !== 'object') {
     return null;
   }
@@ -106,7 +102,7 @@ function lookupCacheEntry(value: unknown): LookupCacheEntry | null {
     return { status: 'not_found' };
   }
 
-  if (candidate.status === 'found' && isMediaMetadata(candidate.metadata)) {
+  if (candidate.status === 'found' && isLookupMetadata(candidate.metadata)) {
     const origin = (value as { origin?: unknown }).origin;
 
     return {
@@ -123,18 +119,19 @@ function isLookupCacheOrigin(value: unknown): value is LookupCacheOrigin {
   return value === 'lookup' || value === 'warmup';
 }
 
-function isMediaMetadata(value: unknown): value is MediaMetadata {
+function isLookupMetadata(value: unknown): value is LookupMetadata {
   if (!value || typeof value !== 'object') {
     return false;
   }
 
-  const candidate = value as Partial<MediaMetadata>;
+  const candidate = value as Partial<LookupMetadata>;
   return (
     (candidate.type === 'movie' || candidate.type === 'tv') &&
     candidate.provider === 'tmdb' &&
     typeof candidate.remoteId === 'string' &&
     typeof candidate.title === 'string' &&
-    typeof candidate.overview === 'string'
+    typeof candidate.overview === 'string' &&
+    (candidate.match === 'year' || candidate.match === 'title' || candidate.match === 'uncertain')
   );
 }
 

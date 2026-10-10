@@ -1,14 +1,14 @@
 import type {
   DailySnapshot,
   DailySnapshotParams,
+  LookupMetadata,
   LookupParams,
-  MediaMetadata,
   OverviewTranslation,
   OverviewTranslationParams,
 } from '../core/types';
 
 export interface MediaProviderPort {
-  lookup(params: LookupParams): Promise<MediaMetadata | null>;
+  lookup(params: LookupParams): Promise<LookupMetadata | null>;
   findOverviewTranslation(params: OverviewTranslationParams): Promise<OverviewTranslation | null>;
   buildDailySnapshot(params: DailySnapshotParams): Promise<DailySnapshot>;
 }

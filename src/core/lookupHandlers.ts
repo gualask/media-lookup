@@ -4,7 +4,7 @@ import type { Deps } from './deps';
 import { parseLookupBatchRequest } from './lookupBatch';
 import { cacheHeaders, errorResponse, jsonResponse } from './responses';
 import type { ParsedRoute } from './routes';
-import type { LookupParams, MediaMetadata } from './types';
+import type { LookupMetadata, LookupParams } from './types';
 
 const LOOKUP_NOT_FOUND_TTL_SECONDS = 60 * 60 * 24;
 const LOOKUP_BATCH_CONCURRENCY = 3;
@@ -14,7 +14,7 @@ type LookupRoute = Extract<ParsedRoute, { kind: 'lookup' }>;
 type LookupResolution =
   | {
       status: 'found';
-      metadata: MediaMetadata;
+      metadata: LookupMetadata;
       cache: 'hit' | 'miss';
       origin?: LookupCacheOrigin;
       tmdbCalls: number;
@@ -29,7 +29,7 @@ type LookupBatchResult =
   | {
       index: number;
       status: 'found';
-      metadata: MediaMetadata;
+      metadata: LookupMetadata;
     }
   | {
       index: number;

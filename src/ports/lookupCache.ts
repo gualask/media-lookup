@@ -1,9 +1,9 @@
-import type { MediaMetadata } from '../core/types';
+import type { LookupMetadata } from '../core/types';
 
 export type LookupCacheOrigin = 'lookup' | 'warmup';
 
 export type LookupCacheEntry =
-  | { status: 'found'; metadata: MediaMetadata; origin?: LookupCacheOrigin }
+  | { status: 'found'; metadata: LookupMetadata; origin?: LookupCacheOrigin }
   | { status: 'not_found' };
 
 export interface LookupCachePort {

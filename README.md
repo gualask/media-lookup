@@ -208,11 +208,26 @@ Response:
   "title": "Dune - Parte due",
   "year": 2024,
   "overview": "Trama localizzata se disponibile",
-  "posterPath": "/abc123.jpg"
+  "posterPath": "/abc123.jpg",
+  "match": "year"
 }
 ```
 
 `posterPath` is a TMDB path, not a proxied media URL.
+
+`match` says how much the result can be trusted:
+
+- `year`: the request had a year, which narrowed the TMDB search.
+- `title`: no year, and the chosen result is the only TMDB result whose
+  localized or original title equals the requested title after normalization.
+- `uncertain`: no year, and either several results share the title (remakes,
+  US/UK versions) or the first result has a different title. The result is
+  still TMDB's most relevant one, but its id and year may belong to a different
+  work with the same name.
+
+The desktop client keeps poster and overview for `uncertain` matches but stores neither
+the remote id nor the year, so it does not auto-merge media or overwrite an
+unknown year on a guess.
 
 Found responses carry `Cache-Control: private, max-age=2592000`: clients may
 keep them, shared caches must not store authorized responses.
@@ -262,7 +277,8 @@ Response:
         "title": "Dune - Parte due",
         "year": 2024,
         "overview": "Trama localizzata se disponibile",
-        "posterPath": "/abc123.jpg"
+        "posterPath": "/abc123.jpg",
+        "match": "year"
       }
     },
     { "index": 1, "status": "not_found" }
@@ -349,7 +365,7 @@ All application cache lives in Cloudflare KV through `DAILY_KV`.
 Lookup metadata:
 
 ```text
-lookup:v1:<language>:<type>:<normalized-title>:<year-or-none>
+lookup:v2:<language>:<type>:<normalized-title>:<year-or-none>
 ```
 
 Title normalization is shared by runtime lookup and daily warmup:
@@ -378,8 +394,11 @@ English overview fallback:
 overview_fallback:v1:<language>:<type>:<remoteId>
 ```
 
-Lookup cache entries store either a found metadata result or a short negative
-`not_found` entry.
+Lookup cache entries store either a found metadata result, with its `match`
+and whether a lookup or the daily warmup wrote it, or a short negative
+`not_found` entry. Warmup entries are `year` matches when TMDB has a release
+year and `uncertain` otherwise. Keys moved from `lookup:v1` to `lookup:v2` when
+`match` was added, so older entries are no longer read and expire on their own.
 
 TTL:
 

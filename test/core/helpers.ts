@@ -4,7 +4,7 @@ import {
   CACHE_TTL_SECONDS,
   type DailySnapshot,
   type DailySnapshotParams,
-  type MediaMetadata,
+  type LookupMetadata,
   type OverviewTranslation,
 } from '../../src/core/types';
 import type { LookupCacheEntry, LookupCachePort } from '../../src/ports/lookupCache';
@@ -87,10 +87,10 @@ export class MemoryRateLimiterPort implements RateLimiterPort {
 
 export class FakeMediaProvider implements MediaProviderPort {
   lookupCalls = 0;
-  readonly lookupResults = new Map<string, MediaMetadata | null>();
+  readonly lookupResults = new Map<string, LookupMetadata | null>();
   translationCalls = 0;
   snapshotCalls = 0;
-  lookupResult: MediaMetadata | null = {
+  lookupResult: LookupMetadata | null = {
     type: 'movie' as const,
     provider: 'tmdb' as const,
     remoteId: '693134',
@@ -98,6 +98,7 @@ export class FakeMediaProvider implements MediaProviderPort {
     year: 2024,
     overview: 'Trama localizzata se disponibile',
     posterPath: '/abc123.jpg',
+    match: 'year',
   };
   translationResult: OverviewTranslation | null = {
     overview: 'English overview recovered from TMDB',
@@ -122,7 +123,13 @@ export class FakeMediaProvider implements MediaProviderPort {
     return {
       generatedAt: params.now.toISOString(),
       language: params.language,
-      items: this.lookupResult ? [{ ...this.lookupResult, source: 'movie_theatrical_recent' }] : [],
+      items: this.lookupResult
+        ? [{ ...withoutMatch(this.lookupResult), source: 'movie_theatrical_recent' }]
+        : [],
     };
   }
+}
+
+function withoutMatch({ match: _match, ...metadata }: LookupMetadata) {
+  return metadata;
 }

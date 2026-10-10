@@ -240,9 +240,62 @@ describe('TmdbMediaProvider lookup', () => {
     expect(requestedUrls[0]?.pathname).toBe('/3/search/tv');
     expect(requestedUrls[0]?.searchParams.get('year')).toBe('2012');
     expect(requestedUrls[0]?.searchParams.has('first_air_date_year')).toBe(false);
-    expect(metadata).toMatchObject({ remoteId: '1396', year: 2008 });
+    expect(metadata).toMatchObject({ remoteId: '1396', year: 2008, match: 'year' });
+  });
+
+  it('marks a title-only match as certain when no other result shares the title', async () => {
+    const provider = searchProvider([
+      { id: 1396, name: 'Breaking Bad', first_air_date: '2008-01-20' },
+      { id: 2000, name: 'Breaking Bad: The Movie', first_air_date: '2019-10-11' },
+    ]);
+
+    await expect(
+      provider.lookup({ type: 'tv', title: 'breaking  bad', language: 'it-IT' }),
+    ).resolves.toMatchObject({ remoteId: '1396', match: 'title' });
+  });
+
+  it('matches the original title as well as the localized one', async () => {
+    const provider = searchProvider([
+      {
+        id: 8587,
+        title: 'Il re leone',
+        original_title: 'The Lion King',
+        release_date: '1994-06-23',
+      },
+    ]);
+
+    await expect(
+      provider.lookup({ type: 'movie', title: 'The Lion King', language: 'it-IT' }),
+    ).resolves.toMatchObject({ remoteId: '8587', match: 'title' });
+  });
+
+  it('marks a title-only match as uncertain when several results share the title', async () => {
+    const provider = searchProvider([
+      { id: 2316, name: 'The Office', first_air_date: '2005-03-24' },
+      { id: 2996, name: 'The Office', first_air_date: '2001-07-09' },
+    ]);
+
+    await expect(
+      provider.lookup({ type: 'tv', title: 'The Office', language: 'it-IT' }),
+    ).resolves.toMatchObject({ remoteId: '2316', match: 'uncertain' });
+  });
+
+  it('marks a title-only match as uncertain when the first result has another title', async () => {
+    const provider = searchProvider([
+      { id: 693134, title: 'Dune - Parte due', release_date: '2024-02-27' },
+      { id: 438631, title: 'Dune', release_date: '2021-09-15' },
+    ]);
+
+    await expect(
+      provider.lookup({ type: 'movie', title: 'Dune', language: 'it-IT' }),
+    ).resolves.toMatchObject({ remoteId: '693134', match: 'uncertain' });
   });
 });
+
+function searchProvider(results: unknown[]): TmdbMediaProvider {
+  const fetchFn = async () => jsonResponse({ results });
+  return new TmdbMediaProvider('token', fetchFn as typeof fetch);
+}
 
 describe('TmdbMediaProvider overview fallback', () => {
   it('fetches a non empty overview for the requested language', async () => {

@@ -53,6 +53,16 @@ export interface MediaMetadata {
   posterPath?: string;
 }
 
+// How the lookup picked its result:
+// - year: a requested year narrowed the TMDB search;
+// - title: no year, and the chosen result is the only one whose title matches exactly;
+// - uncertain: no year, and the title is shared by several results or does not match exactly.
+export type LookupMatch = 'year' | 'title' | 'uncertain';
+
+export interface LookupMetadata extends MediaMetadata {
+  match: LookupMatch;
+}
+
 export interface DailySnapshotItem extends MediaMetadata {
   source: DailySnapshotSource;
 }

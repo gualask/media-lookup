@@ -3,7 +3,7 @@ import type { LookupParams, OverviewTranslationParams } from './types';
 export function lookupCacheKey(params: LookupParams): string {
   return [
     'lookup',
-    'v1',
+    'v2',
     params.language,
     params.type,
     encodeURIComponent(normalizeTitle(params.title)),
@@ -21,7 +21,7 @@ export function overviewFallbackCacheKey(params: OverviewTranslationParams): str
   ].join(':');
 }
 
-function normalizeTitle(title: string): string {
+export function normalizeTitle(title: string): string {
   return title
     .trim()
     .toLowerCase()

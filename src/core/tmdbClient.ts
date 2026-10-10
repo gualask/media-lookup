@@ -1,9 +1,12 @@
+import { normalizeTitle } from './cacheKeys';
 import { ProviderConfigurationError, UpstreamProviderError } from './errors';
 import type {
   DailySnapshot,
   DailySnapshotItem,
   DailySnapshotParams,
   DailySnapshotSource,
+  LookupMatch,
+  LookupMetadata,
   LookupParams,
   MediaMetadata,
   MediaType,
@@ -32,6 +35,7 @@ interface TmdbSearchResponse<T> {
 interface TmdbMovieResult {
   id?: number;
   title?: string;
+  original_title?: string;
   release_date?: string;
   overview?: string;
   poster_path?: string | null;
@@ -40,6 +44,7 @@ interface TmdbMovieResult {
 interface TmdbTvResult {
   id?: number;
   name?: string;
+  original_name?: string;
   first_air_date?: string;
   overview?: string;
   poster_path?: string | null;
@@ -53,7 +58,7 @@ export class TmdbMediaProvider {
     private readonly fetchFn: typeof fetch,
   ) {}
 
-  async lookup(params: LookupParams): Promise<MediaMetadata | null> {
+  async lookup(params: LookupParams): Promise<LookupMetadata | null> {
     if (params.type === 'movie') {
       const response = await this.request<TmdbSearchResponse<TmdbMovieResult>>('/search/movie', {
         query: params.title,
@@ -63,8 +68,8 @@ export class TmdbMediaProvider {
         ...(params.year ? { primary_release_year: params.year.toString() } : {}),
       });
 
-      const result = pickBestResult(response.results ?? [], params.year, 'movie');
-      return result ? mapMovie(result) : null;
+      const picked = pickBestResult(response.results ?? [], params, 'movie');
+      return withMatch(picked && mapMovie(picked.result), picked?.match);
     }
 
     const response = await this.request<TmdbSearchResponse<TmdbTvResult>>('/search/tv', {
@@ -75,8 +80,8 @@ export class TmdbMediaProvider {
       ...(params.year ? { year: params.year.toString() } : {}),
     });
 
-    const result = pickBestResult(response.results ?? [], params.year, 'tv');
-    return result ? mapTv(result) : null;
+    const picked = pickBestResult(response.results ?? [], params, 'tv');
+    return withMatch(picked && mapTv(picked.result), picked?.match);
   }
 
   async findOverviewTranslation(
@@ -228,22 +233,45 @@ export class TmdbMediaProvider {
 
 function pickBestResult<T extends TmdbResult>(
   results: readonly T[],
-  year: number | undefined,
+  params: LookupParams,
   type: MediaType,
-): T | null {
-  if (results.length === 0) {
+): { result: T; match: LookupMatch } | null {
+  const first = results[0];
+
+  if (!first) {
     return null;
   }
 
-  if (year) {
-    const exactYear = results.find((result) => extractYear(resultDate(result, type)) === year);
+  // TMDB already narrows the search by year, so any result is a year match.
+  if (params.year) {
+    const exactYear = results.find(
+      (result) => extractYear(resultDate(result, type)) === params.year,
+    );
 
-    if (exactYear) {
-      return exactYear;
-    }
+    return { result: exactYear ?? first, match: 'year' };
   }
 
-  return results[0] ?? null;
+  const query = normalizeTitle(params.title);
+  const sameTitle = results.filter((result) => hasTitle(result, query, type));
+  const unique = sameTitle.length === 1 && sameTitle[0] === first;
+
+  return { result: first, match: unique ? 'title' : 'uncertain' };
+}
+
+function hasTitle(result: TmdbResult, normalizedQuery: string, type: MediaType): boolean {
+  const titles =
+    type === 'movie'
+      ? [(result as TmdbMovieResult).title, (result as TmdbMovieResult).original_title]
+      : [(result as TmdbTvResult).name, (result as TmdbTvResult).original_name];
+
+  return titles.some((title) => title !== undefined && normalizeTitle(title) === normalizedQuery);
+}
+
+function withMatch(
+  metadata: MediaMetadata | null,
+  match: LookupMatch | undefined,
+): LookupMetadata | null {
+  return metadata && match ? { ...metadata, match } : null;
 }
 
 function dedupeAndLimit(

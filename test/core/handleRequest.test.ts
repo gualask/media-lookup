@@ -55,6 +55,7 @@ describe('handleRequest', () => {
       year: 2024,
       overview: '',
       posterPath: '/abc123.jpg',
+      match: 'year',
     };
 
     const response = await handleRequest(
@@ -96,6 +97,7 @@ describe('handleRequest', () => {
       provider: 'tmdb',
       remoteId: '693134',
       posterPath: '/abc123.jpg',
+      match: 'year',
     });
   });
 
@@ -382,6 +384,7 @@ describe('handleRequest', () => {
       year: 2024,
       overview: '',
       posterPath: '/abc123.jpg',
+      match: 'year',
     };
     const deps = createTestDeps({ provider });
 
@@ -521,6 +524,7 @@ describe('handleRequest', () => {
       provider: 'tmdb',
       remoteId: '693134',
       title: 'Dune - Parte due',
+      match: 'year',
     });
   });
 });

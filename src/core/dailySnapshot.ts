@@ -1,6 +1,6 @@
 import { lookupCacheKey } from './cacheKeys';
 import type { Deps } from './deps';
-import type { DailySnapshot, DailySnapshotItem, MediaMetadata } from './types';
+import type { DailySnapshot, DailySnapshotItem, LookupMetadata } from './types';
 
 const DAILY_SNAPSHOT_TMDB_CALLS = 6;
 
@@ -116,7 +116,8 @@ async function putLookupCacheItem(
   }
 }
 
-function snapshotItemToMetadata(item: DailySnapshotItem): MediaMetadata {
+// Warmup keys carry the TMDB year when there is one, so a lookup that hits them sent that year.
+function snapshotItemToMetadata(item: DailySnapshotItem): LookupMetadata {
   return {
     type: item.type,
     provider: item.provider,
@@ -125,6 +126,7 @@ function snapshotItemToMetadata(item: DailySnapshotItem): MediaMetadata {
     year: item.year,
     overview: item.overview,
     posterPath: item.posterPath,
+    match: item.year ? 'year' : 'uncertain',
   };
 }
 
