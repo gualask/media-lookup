@@ -438,6 +438,19 @@ describe('handleRequest', () => {
     expect(provider.snapshotCalls).toBe(1);
   });
 
+  it('serves the rebuilt snapshot when storing it fails', async () => {
+    const storage = new MemoryStoragePort();
+    storage.putText = () => Promise.reject(new Error('KV put() limit exceeded for the day.'));
+    const lookupCache = new MemoryLookupCachePort();
+    const deps = createTestDeps({ lookupCache, storage });
+
+    const response = await handleRequest(new Request('https://example.com/'), deps);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('Dune - Parte due');
+    expect(lookupCache.entries.size).toBe(0);
+  });
+
   it('warms lookup cache with the same keys used by client lookup requests', async () => {
     const provider = new FakeMediaProvider();
     const deps = createTestDeps({ provider });

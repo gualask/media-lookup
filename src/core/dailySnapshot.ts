@@ -52,8 +52,12 @@ export async function ensureDailySnapshot(
     timeZone: deps.config.dailyRefreshTimeZone,
   });
 
-  await deps.storage.putText(dailySnapshotKey(language), JSON.stringify(snapshot));
-  await warmLookupCacheFromSnapshot(deps, snapshot);
+  // A failed write (for example the daily KV write limit) still serves the fresh snapshot.
+  // Warmup is skipped because its writes would fail the same way.
+  if (await safeStorePut(deps, dailySnapshotKey(language), JSON.stringify(snapshot))) {
+    await warmLookupCacheFromSnapshot(deps, snapshot);
+  }
+
   await deps.metrics.record({
     route: 'daily_refresh',
     cache: 'miss',
@@ -68,6 +72,16 @@ export async function ensureDailySnapshot(
     snapshot,
     refreshed: true,
   };
+}
+
+async function safeStorePut(deps: Deps, key: string, value: string): Promise<boolean> {
+  try {
+    await deps.storage.putText(key, value);
+    return true;
+  } catch (error) {
+    console.warn('Daily snapshot put failed', error);
+    return false;
+  }
 }
 
 export async function warmLookupCacheFromSnapshot(
