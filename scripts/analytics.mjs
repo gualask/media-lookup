@@ -30,7 +30,31 @@ await printLookupCache(now - Math.min(days, LOGS_DAYS) * DAY_MS, now);
 await printInvocations(now - days * DAY_MS, now);
 
 async function printLookupCache(from, to) {
-  const keys = ['items', 'cacheHits', 'warmupHits', 'tmdbCalls'];
+  const rows = new Map();
+
+  // A sum over a field that no event has yet empties the whole result, so `errors`, added
+  // later than the others, gets its own query.
+  for (const keys of [['items', 'cacheHits', 'warmupHits', 'tmdbCalls'], ['errors']]) {
+    await sumByRoute(from, to, keys, rows);
+  }
+
+  console.log(`\nLookup cache, Workers Logs, last ${Math.min(days, LOGS_DAYS)} days`);
+  printTable(
+    ['route', 'events', 'items', 'errors', 'cacheHits', 'hit rate', 'warmupHits', 'tmdbCalls'],
+    [...rows.values()].map((row) => [
+      row.route,
+      row.itemsEvents ?? 0,
+      row.items ?? 0,
+      row.errors ?? 0,
+      row.cacheHits ?? 0,
+      percent(row.cacheHits, row.items),
+      row.warmupHits ?? 0,
+      row.tmdbCalls ?? 0,
+    ]),
+  );
+}
+
+async function sumByRoute(from, to, keys, rows) {
   const result = await callApi(`/accounts/${accountId}/workers/observability/telemetry/query`, {
     queryId: 'media-lookup-analytics',
     timeframe: { from, to },
@@ -40,17 +64,15 @@ async function printLookupCache(from, to) {
       datasets: ['cloudflare-workers'],
       filters: [
         { key: '$metadata.service', operation: 'eq', type: 'string', value: SCRIPT_NAME },
-        { key: 'items', operation: 'exists', type: 'number', value: 0 },
+        { key: keys[0], operation: 'exists', type: 'number', value: 0 },
       ],
       calculations: [
-        { operator: 'count', alias: 'events' },
+        { operator: 'count', alias: `${keys[0]}Events` },
         ...keys.map((key) => ({ operator: 'sum', key, keyType: 'number', alias: key })),
       ],
       groupBys: [{ type: 'string', value: 'route' }],
     },
   });
-
-  const rows = new Map();
 
   for (const calculation of result.calculations ?? []) {
     for (const aggregate of calculation.aggregates ?? []) {
@@ -60,20 +82,6 @@ async function printLookupCache(from, to) {
       rows.set(route, row);
     }
   }
-
-  console.log(`\nLookup cache, Workers Logs, last ${Math.min(days, LOGS_DAYS)} days`);
-  printTable(
-    ['route', 'events', 'items', 'cacheHits', 'hit rate', 'warmupHits', 'tmdbCalls'],
-    [...rows.values()].map((row) => [
-      row.route,
-      row.events ?? 0,
-      row.items ?? 0,
-      row.cacheHits ?? 0,
-      percent(row.cacheHits, row.items),
-      row.warmupHits ?? 0,
-      row.tmdbCalls ?? 0,
-    ]),
-  );
 }
 
 async function printInvocations(from, to) {

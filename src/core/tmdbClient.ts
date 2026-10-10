@@ -21,12 +21,24 @@ const MOVIE_TRENDING_FUTURE_DAYS = 365;
 const MOVIE_RECENT_DAYS = 45;
 const MOVIE_HOME_RELEASE_DAYS = 120;
 const MOVIE_UPCOMING_DAYS = 45;
+// A first release older than this is a re-release, not news.
+const MOVIE_FIRST_RELEASE_MAX_AGE_DAYS = 365;
 const TV_RECENT_DAYS = 14;
-const TV_UPCOMING_DAYS = 14;
+const TV_PREMIERE_RECENT_DAYS = 60;
+const TV_PREMIERE_UPCOMING_DAYS = 60;
+// New episodes count only for series that started within this many years, so long-running
+// shows and decades-old soaps do not fill the section.
+const TV_RECENT_EPISODES_MAX_SERIES_AGE_YEARS = 10;
 const THEATRICAL_RELEASE_TYPES = '2|3';
 const HOME_RELEASE_TYPES = '4|5';
 const WATCH_MONETIZATION_TYPES = 'flatrate|rent|buy';
-const SCRIPTED_TV_TYPE = '4';
+// Miniseries (2) and scripted series (4): no news, reality, talk shows or documentaries.
+const TV_TYPES = '2|4';
+// Daily soaps air every weekday and would fill the new episodes section.
+const TV_EXCLUDED_GENRES = '10766';
+const LAST_DATE_KEY = '9999-12-31';
+const DEFAULT_RETRY_AFTER_SECONDS = 1;
+const MAX_RETRY_AFTER_SECONDS = 3;
 
 interface TmdbSearchResponse<T> {
   results?: T[];
@@ -56,6 +68,8 @@ export class TmdbMediaProvider {
   constructor(
     private readonly token: string,
     private readonly fetchFn: typeof fetch,
+    private readonly sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((resolve) => setTimeout(resolve, ms)),
   ) {}
 
   async lookup(params: LookupParams): Promise<LookupMetadata | null> {
@@ -65,7 +79,9 @@ export class TmdbMediaProvider {
         language: params.language,
         include_adult: 'false',
         page: '1',
-        ...(params.year ? { primary_release_year: params.year.toString() } : {}),
+        // `year` matches every release date, including the local one a release name often
+        // carries; `primary_release_year` would miss those and return other films instead.
+        ...(params.year ? { year: params.year.toString() } : {}),
       });
 
       const picked = pickBestResult(response.results ?? [], params, 'movie');
@@ -126,17 +142,22 @@ export class TmdbMediaProvider {
       include_null_first_air_dates: 'false',
       sort_by: 'popularity.desc',
       timezone: params.timeZone,
-      with_type: SCRIPTED_TV_TYPE,
+      with_type: TV_TYPES,
+      without_genres: TV_EXCLUDED_GENRES,
     };
     const trendingMovieStart = addDaysToDateKey(today, -MOVIE_TRENDING_PAST_DAYS);
     const trendingMovieEnd = addDaysToDateKey(today, MOVIE_TRENDING_FUTURE_DAYS);
+    const firstReleaseStart = addDaysToDateKey(today, -MOVIE_FIRST_RELEASE_MAX_AGE_DAYS);
+    const notReReleased = (results: readonly TmdbMovieResult[]) =>
+      filterMoviesByReleaseWindow(results, firstReleaseStart, LAST_DATE_KEY);
     const [
       trendingMovies,
       recentTheatricalMovies,
       recentHomeReleaseMovies,
       upcomingTheatricalMovies,
+      recentTvPremieres,
       recentTvEpisodes,
-      upcomingTvEpisodes,
+      upcomingTvPremieres,
     ] = await Promise.all([
       this.list<TmdbMovieResult>('/trending/movie/day', movieListParams),
       this.list<TmdbMovieResult>('/discover/movie', {
@@ -161,13 +182,19 @@ export class TmdbMediaProvider {
       }),
       this.list<TmdbTvResult>('/discover/tv', {
         ...tvBaseParams,
-        'air_date.gte': addDaysToDateKey(today, -TV_RECENT_DAYS),
-        'air_date.lte': today,
+        'first_air_date.gte': addDaysToDateKey(today, -TV_PREMIERE_RECENT_DAYS),
+        'first_air_date.lte': today,
       }),
       this.list<TmdbTvResult>('/discover/tv', {
         ...tvBaseParams,
-        'air_date.gte': addDaysToDateKey(today, 1),
-        'air_date.lte': addDaysToDateKey(today, TV_UPCOMING_DAYS),
+        'air_date.gte': addDaysToDateKey(today, -TV_RECENT_DAYS),
+        'air_date.lte': today,
+        'first_air_date.gte': addYearsToDateKey(today, -TV_RECENT_EPISODES_MAX_SERIES_AGE_YEARS),
+      }),
+      this.list<TmdbTvResult>('/discover/tv', {
+        ...tvBaseParams,
+        'first_air_date.gte': addDaysToDateKey(today, 1),
+        'first_air_date.lte': addDaysToDateKey(today, TV_PREMIERE_UPCOMING_DAYS),
       }),
     ]);
 
@@ -176,7 +203,7 @@ export class TmdbMediaProvider {
       language: params.language,
       items: [
         ...dedupeAndLimit('movie', [
-          { source: 'movie_home_release_recent', results: recentHomeReleaseMovies },
+          { source: 'movie_home_release_recent', results: notReReleased(recentHomeReleaseMovies) },
           {
             source: 'movie_trending_recent',
             results: filterMoviesByReleaseWindow(
@@ -185,12 +212,16 @@ export class TmdbMediaProvider {
               trendingMovieEnd,
             ),
           },
-          { source: 'movie_theatrical_recent', results: recentTheatricalMovies },
-          { source: 'movie_theatrical_upcoming', results: upcomingTheatricalMovies },
+          { source: 'movie_theatrical_recent', results: notReReleased(recentTheatricalMovies) },
+          {
+            source: 'movie_theatrical_upcoming',
+            results: notReReleased(upcomingTheatricalMovies),
+          },
         ]),
         ...dedupeAndLimit('tv', [
+          { source: 'tv_premiere_recent', results: recentTvPremieres },
           { source: 'tv_recent_episodes', results: recentTvEpisodes },
-          { source: 'tv_upcoming_episodes', results: upcomingTvEpisodes },
+          { source: 'tv_premiere_upcoming', results: upcomingTvPremieres },
         ]),
       ],
     };
@@ -216,12 +247,19 @@ export class TmdbMediaProvider {
       url.searchParams.set(key, value);
     }
 
-    const response = await this.fetchFn(url, {
+    const init = {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${this.token}`,
       },
-    });
+    };
+    let response = await this.fetchFn(url, init);
+
+    // TMDB asks clients to respect 429: wait as told, within a bound, and try once more.
+    if (response.status === 429) {
+      await this.sleep(retryAfterMs(response.headers.get('Retry-After')));
+      response = await this.fetchFn(url, init);
+    }
 
     if (!response.ok) {
       throw new UpstreamProviderError('TMDB API request failed', response.status);
@@ -242,20 +280,29 @@ function pickBestResult<T extends TmdbResult>(
     return null;
   }
 
-  // TMDB already narrows the search by year, so any result is a year match.
-  if (params.year) {
-    const exactYear = results.find(
-      (result) => extractYear(resultDate(result, type)) === params.year,
-    );
-
-    return { result: exactYear ?? first, match: 'year' };
-  }
-
   const query = normalizeTitle(params.title);
   const sameTitle = results.filter((result) => hasTitle(result, query, type));
-  const unique = sameTitle.length === 1 && sameTitle[0] === first;
 
-  return { result: first, match: unique ? 'title' : 'uncertain' };
+  // TMDB already narrows the search by year, so any result is a year match. Among them, prefer
+  // the exact title, then the exact year: the first result can be another work with those words.
+  if (params.year) {
+    const isSameYear = (result: T) => extractYear(resultDate(result, type)) === params.year;
+    const result = sameTitle.find(isSameYear) ?? sameTitle[0] ?? results.find(isSameYear) ?? first;
+
+    return { result, match: 'year' };
+  }
+
+  return {
+    result: sameTitle[0] ?? first,
+    match: sameTitle.length === 1 ? 'title' : 'uncertain',
+  };
+}
+
+function retryAfterMs(header: string | null): number {
+  const seconds = Number(header);
+  const bounded = Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_RETRY_AFTER_SECONDS;
+
+  return Math.min(bounded, MAX_RETRY_AFTER_SECONDS) * 1000;
 }
 
 function hasTitle(result: TmdbResult, normalizedQuery: string, type: MediaType): boolean {
@@ -391,6 +438,12 @@ function dateKeyInTimeZone(date: Date, timeZone: string): string {
   );
 
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addYearsToDateKey(dateKey: string, years: number): string {
+  const year = Number(dateKey.slice(0, 4));
+
+  return Number.isInteger(year) ? `${year + years}${dateKey.slice(4)}` : dateKey;
 }
 
 function addDaysToDateKey(dateKey: string, days: number): string {

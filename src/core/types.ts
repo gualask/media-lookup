@@ -7,8 +7,9 @@ export type DailySnapshotSource =
   | 'movie_theatrical_recent'
   | 'movie_home_release_recent'
   | 'movie_theatrical_upcoming'
+  | 'tv_premiere_recent'
   | 'tv_recent_episodes'
-  | 'tv_upcoming_episodes';
+  | 'tv_premiere_upcoming';
 
 export interface AppConfig {
   tmdbToken: string;

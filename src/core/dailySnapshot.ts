@@ -2,10 +2,10 @@ import { lookupCacheKey } from './cacheKeys';
 import type { Deps } from './deps';
 import type { DailySnapshot, DailySnapshotItem, LookupMetadata } from './types';
 
-const DAILY_SNAPSHOT_TMDB_CALLS = 6;
+const DAILY_SNAPSHOT_TMDB_CALLS = 7;
 
 export function dailySnapshotKey(language: string): string {
-  return `daily:v4:${language}`;
+  return `daily:v5:${language}`;
 }
 
 export async function readDailySnapshot(

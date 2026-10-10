@@ -1,4 +1,5 @@
 import type { Deps } from '../../src/core/deps';
+import { UpstreamProviderError } from '../../src/core/errors';
 import {
   type AppConfig,
   CACHE_TTL_SECONDS,
@@ -88,6 +89,7 @@ export class MemoryRateLimiterPort implements RateLimiterPort {
 export class FakeMediaProvider implements MediaProviderPort {
   lookupCalls = 0;
   readonly lookupResults = new Map<string, LookupMetadata | null>();
+  readonly failingTitles = new Set<string>();
   translationCalls = 0;
   snapshotCalls = 0;
   lookupResult: LookupMetadata | null = {
@@ -107,6 +109,9 @@ export class FakeMediaProvider implements MediaProviderPort {
 
   async lookup(params: { title: string }) {
     this.lookupCalls += 1;
+    if (this.failingTitles.has(params.title)) {
+      throw new UpstreamProviderError('TMDB API request failed', 429);
+    }
     if (this.lookupResults.has(params.title)) {
       return this.lookupResults.get(params.title) ?? null;
     }

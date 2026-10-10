@@ -1,6 +1,7 @@
 import type { LookupCacheEntry, LookupCacheOrigin } from '../ports/lookupCache';
 import { lookupCacheKey } from './cacheKeys';
 import type { Deps } from './deps';
+import { UpstreamProviderError } from './errors';
 import { parseLookupBatchRequest } from './lookupBatch';
 import { cacheHeaders, errorResponse, jsonResponse } from './responses';
 import type { ParsedRoute } from './routes';
@@ -25,6 +26,16 @@ type LookupResolution =
       tmdbCalls: number;
     };
 
+// Only batch items can fail on their own; a single lookup still answers 502.
+type BatchItemResolution =
+  | LookupResolution
+  | {
+      status: 'error';
+      cache: 'miss';
+      tmdbCalls: number;
+      message: string;
+    };
+
 type LookupBatchResult =
   | {
       index: number;
@@ -34,6 +45,11 @@ type LookupBatchResult =
   | {
       index: number;
       status: 'not_found';
+    }
+  | {
+      index: number;
+      status: 'error';
+      error: { message: string };
     };
 
 export async function handleLookup(deps: Deps, route: LookupRoute): Promise<Response> {
@@ -69,7 +85,7 @@ export async function handleLookupBatch(request: Request, deps: Deps): Promise<R
   }
 
   const resolutions = await mapWithConcurrency(parsed.items, LOOKUP_BATCH_CONCURRENCY, (item) =>
-    resolveLookup(deps, item),
+    resolveBatchItem(deps, item),
   );
   const results = resolutions.map((resolution, index): LookupBatchResult => {
     if (resolution.status === 'found') {
@@ -77,6 +93,14 @@ export async function handleLookupBatch(request: Request, deps: Deps): Promise<R
         index,
         status: 'found',
         metadata: resolution.metadata,
+      };
+    }
+
+    if (resolution.status === 'error') {
+      return {
+        index,
+        status: 'error',
+        error: { message: resolution.message },
       };
     }
 
@@ -91,13 +115,41 @@ export async function handleLookupBatch(request: Request, deps: Deps): Promise<R
     cache: resolutions.some((resolution) => resolution.cache === 'miss') ? 'miss' : 'hit',
     provider: 'tmdb',
     tmdbCalls: resolutions.reduce((sum, resolution) => sum + resolution.tmdbCalls, 0),
-    status: results.some((result) => result.status === 'found') ? 'ok' : 'not_found',
+    status: batchStatus(results),
     mediaType: commonValue(parsed.items.map((item) => item.type)) ?? 'none',
     language: commonValue(parsed.items.map((item) => item.language)) ?? 'mixed',
     ...lookupCounts(resolutions),
   });
 
   return jsonResponse({ results }, { status: 200 });
+}
+
+// One TMDB failure (a 429 that persists, a 5xx) fails only its own item: the client keeps the
+// other results and retries the failed one with its own backoff.
+async function resolveBatchItem(deps: Deps, params: LookupParams): Promise<BatchItemResolution> {
+  try {
+    return await resolveLookup(deps, params);
+  } catch (error) {
+    if (!(error instanceof UpstreamProviderError)) {
+      throw error;
+    }
+
+    console.warn('Lookup batch item failed', error.status, error.message);
+    return {
+      status: 'error',
+      cache: 'miss',
+      tmdbCalls: 1,
+      message: error.status ? `${error.message} (${error.status})` : error.message,
+    };
+  }
+}
+
+function batchStatus(results: readonly LookupBatchResult[]): 'ok' | 'not_found' | 'error' {
+  if (results.some((result) => result.status === 'found')) {
+    return 'ok';
+  }
+
+  return results.some((result) => result.status === 'error') ? 'error' : 'not_found';
 }
 
 async function resolveLookup(deps: Deps, params: LookupParams): Promise<LookupResolution> {
@@ -197,9 +249,10 @@ async function mapWithConcurrency<T, U>(
   return results;
 }
 
-function lookupCounts(resolutions: readonly LookupResolution[]) {
+function lookupCounts(resolutions: readonly BatchItemResolution[]) {
   return {
     items: resolutions.length,
+    errors: resolutions.filter((resolution) => resolution.status === 'error').length,
     cacheHits: resolutions.filter((resolution) => resolution.cache === 'hit').length,
     warmupHits: resolutions.filter(
       (resolution) => resolution.status === 'found' && resolution.origin === 'warmup',

@@ -3,7 +3,7 @@ import type { LookupParams, OverviewTranslationParams } from './types';
 export function lookupCacheKey(params: LookupParams): string {
   return [
     'lookup',
-    'v2',
+    'v3',
     params.language,
     params.type,
     encodeURIComponent(normalizeTitle(params.title)),

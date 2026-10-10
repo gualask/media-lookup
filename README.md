@@ -105,18 +105,26 @@ parameters. Requests such as `/?type=movie&title=Dune` return `400`.
 The home page refreshes the default-language daily snapshot lazily. If the
 stored snapshot was generated on the current day in `DAILY_REFRESH_TIME_ZONE`,
 it is reused from KV and TMDB is not called. If it is missing or stale, the
-Worker calls TMDB, stores `daily:v4:<language>`, and warms lookup cache entries
+Worker calls TMDB, stores `daily:v5:<language>`, and warms lookup cache entries
 with the same keys used by `/lookup`.
 
 The rendered page:
 
-- Shows `Media lookup`, item count, and `generatedAt` on the same header line.
-- Groups items by source section.
-- Uses direct TMDB poster URLs at size `w185`.
-- Links each item to a YouTube search for `<title> <year> trailer italiano`.
-- Shows the full localized overview in a fixed-height scrollable item body.
+- Keeps a sticky top bar with the title, when the snapshot was generated (in
+  `DAILY_REFRESH_TIME_ZONE`), and two tabs, Film and Serie, with their counts.
+  The tabs are radio buttons styled with CSS, so switching needs no script.
+- Below the tabs, links jump to each non-empty section of the active tab.
+- Shows each item as a card: poster first (direct TMDB URL at size `w185`,
+  lazy-loaded with fixed dimensions), then title, year and a YouTube search for
+  `<title> <year> trailer italiano`.
+- Clamps the localized overview to 8 lines with no inner scroll area, so the
+  page scroll never gets caught by a card. Long overviews get "Leggi tutto",
+  a `<details>` toggle; a short inline script hides it where the text already
+  fits. Without JavaScript the toggle simply stays visible.
 - Shows a short notice for empty localized overviews.
-- Ships no client JavaScript.
+- Credits TMDB in the footer, as its attribution rules require: the approved
+  logo, unmodified and smaller than the page title, linking to
+  themoviedb.org, next to the required notice.
 
 The page cannot call the protected `/translate` endpoint itself. If an
 authorized call has already cached an English overview fallback, the home page
@@ -126,44 +134,52 @@ shows it while rendering.
 
 The home snapshot uses these TMDB sources in display and dedupe priority order:
 
-1. Film recenti streaming e home video:
+1. Streaming e home video:
    `/discover/movie`, `release_date.gte=today-120`,
    `release_date.lte=today`, `with_release_type=4|5`,
    `watch_region=<region>`,
    `with_watch_monetization_types=flatrate|rent|buy`.
-2. Film in tendenza recenti:
+2. In tendenza:
    `/trending/movie/day`, then local release-date filtering from `today-180` to
    `today+365`.
-3. Film recenti al cinema:
+3. Al cinema:
    `/discover/movie`, `release_date.gte=today-45`,
    `release_date.lte=today`, `with_release_type=2|3`.
-4. Film in arrivo al cinema:
+4. In arrivo al cinema:
    `/discover/movie`, `release_date.gte=today+1`,
    `release_date.lte=today+45`, `with_release_type=2|3`.
-5. Serie con episodi recenti:
+5. Serie nuove:
+   `/discover/tv`, `first_air_date.gte=today-60`, `first_air_date.lte=today`.
+6. Nuovi episodi:
    `/discover/tv`, `air_date.gte=today-14`, `air_date.lte=today`,
-   `with_type=4`.
-6. Serie con episodi in arrivo:
-   `/discover/tv`, `air_date.gte=today+1`, `air_date.lte=today+14`,
-   `with_type=4`.
+   `first_air_date.gte=today-10y`.
+7. Serie in arrivo:
+   `/discover/tv`, `first_air_date.gte=today+1`, `first_air_date.lte=today+60`.
 
 Movie discovery uses `sort_by=popularity.desc`, `include_adult=false`,
 `include_video=false`, `page=1`, and the region inferred from the language tag,
 for example `it-IT` -> `IT`. The home-video source also sends `watch_region`.
 
-TV discovery uses `air_date`, not `first_air_date`, so long-running series can
-appear when they have recent or upcoming episodes. It also sends
-`include_adult=false`, `include_null_first_air_dates=false`,
-`sort_by=popularity.desc`, `timezone=<DAILY_REFRESH_TIME_ZONE>`, and
-`with_type=4` for scripted shows.
+TMDB counts a return to cinemas or a new home release as a release, so the home
+video and both theatrical sources drop movies first released more than a year
+ago (Harry Potter or Terminator 2 back in theaters are not news). Trending
+movies keep their own window from `today-180` to `today+365`.
+
+TV discovery sends `include_adult=false`, `include_null_first_air_dates=false`,
+`sort_by=popularity.desc`, `timezone=<DAILY_REFRESH_TIME_ZONE>`,
+`with_type=2|4` (miniseries and scripted shows) and `without_genres=10766`, so
+daily soaps do not fill the sections. New episodes only count for series that
+started within the last 10 years: long-running shows such as The Simpsons or
+Law & Order would otherwise top the list, while recent seasons of shows like
+Slow Horses or Ted Lasso still appear.
 
 Daily snapshot items whose localized title contains no Latin letters are
 excluded from the home and warmup flow.
 
 The Worker accepts up to 20 new unique items per source. Movies are deduped by
 TMDB id in this priority order: streaming/home video, trending recent, recent
-theatrical, upcoming theatrical. TV items are deduped by TMDB id with recent
-episodes before upcoming episodes.
+theatrical, upcoming theatrical. TV items are deduped by TMDB id in the order
+new series, new episodes, upcoming series.
 
 ## Favicon
 
@@ -195,8 +211,17 @@ Missing metadata returns `404`.
 
 For `tv`, `year` is sent to TMDB as `year`, which matches the first air date
 and every episode air date. A title parsed from a recent season can still find
-a series that started years earlier. For `movie`, `year` is sent as
-`primary_release_year`.
+a series that started years earlier. For `movie`, `year` is also sent as
+`year`, which matches every release date, including the local one a release
+name often carries: "Povere creature" with 2024, its Italian release year, is
+found, while `primary_release_year` returns nothing or other films that share
+words with the title.
+
+Among the results, the Worker prefers an exact title match (localized or
+original, after normalization), then an exact year, then TMDB's first result.
+
+TMDB answers about 40 requests per second. On a `429` the Worker waits for
+`Retry-After` (at most 3 seconds) and retries once.
 
 Response:
 
@@ -218,12 +243,12 @@ Response:
 `match` says how much the result can be trusted:
 
 - `year`: the request had a year, which narrowed the TMDB search.
-- `title`: no year, and the chosen result is the only TMDB result whose
-  localized or original title equals the requested title after normalization.
+- `title`: no year, and exactly one TMDB result has a localized or original
+  title equal to the requested title after normalization; that result is chosen.
 - `uncertain`: no year, and either several results share the title (remakes,
-  US/UK versions) or the first result has a different title. The result is
-  still TMDB's most relevant one, but its id and year may belong to a different
-  work with the same name.
+  US/UK versions) or none matches it exactly. The result is the first exact
+  match, or TMDB's most relevant one, but its id and year may belong to a
+  different work with the same name.
 
 The desktop client keeps poster and overview for `uncertain` matches but stores neither
 the remote id nor the year, so it does not auto-merge media or overwrite an
@@ -261,6 +286,9 @@ Rules:
   batch with `400`.
 - Internal provider concurrency is capped at 3.
 - Results are returned item-by-item and keep the original input index.
+- A TMDB failure for one item (a `429` that persists after the retry, a `5xx`)
+  fails only that item with `status: "error"`; the other items keep their
+  results, and the error is not cached.
 
 Response:
 
@@ -281,7 +309,12 @@ Response:
         "match": "year"
       }
     },
-    { "index": 1, "status": "not_found" }
+    { "index": 1, "status": "not_found" },
+    {
+      "index": 2,
+      "status": "error",
+      "error": { "message": "TMDB API request failed (429)" }
+    }
   ]
 }
 ```
@@ -365,7 +398,7 @@ All application cache lives in Cloudflare KV through `DAILY_KV`.
 Lookup metadata:
 
 ```text
-lookup:v2:<language>:<type>:<normalized-title>:<year-or-none>
+lookup:v3:<language>:<type>:<normalized-title>:<year-or-none>
 ```
 
 Title normalization is shared by runtime lookup and daily warmup:
@@ -382,7 +415,7 @@ Example: `Dune - Parte due` and `Dune Parte Due` produce the same title segment.
 Daily snapshot:
 
 ```text
-daily:v4:<language>
+daily:v5:<language>
 ```
 
 The daily snapshot is stored without a KV expiration TTL. Freshness is decided
@@ -397,8 +430,10 @@ overview_fallback:v1:<language>:<type>:<remoteId>
 Lookup cache entries store either a found metadata result, with its `match`
 and whether a lookup or the daily warmup wrote it, or a short negative
 `not_found` entry. Warmup entries are `year` matches when TMDB has a release
-year and `uncertain` otherwise. Keys moved from `lookup:v1` to `lookup:v2` when
-`match` was added, so older entries are no longer read and expire on their own.
+year and `uncertain` otherwise. The key version changes whenever entries or the
+way results are chosen change (`v2` added `match`, `v3` moved movie searches to
+`year` and to exact-title preference), so older entries are no longer read and
+expire on their own.
 
 TTL:
 
@@ -420,7 +455,7 @@ route, cache, provider, tmdbCalls, status, mediaType, language
 Lookup routes also add:
 
 ```text
-items, cacheHits, warmupHits
+items, errors, cacheHits, warmupHits
 ```
 
 `warmupHits` counts KV hits written by the daily snapshot warmup rather than by
@@ -450,7 +485,7 @@ Current behavior:
 
 - `/` records `page` with `cache=hit` when the daily snapshot is reused.
 - `/` records `page` with `cache=miss` when it triggered a refresh.
-- A refresh also records `daily_refresh` with `tmdbCalls=6`.
+- A refresh also records `daily_refresh` with `tmdbCalls=7`.
 - `/lookup`, `/lookup/batch`, and `/translate` record `hit` or `miss`. A batch
   records `miss` when at least one item missed the cache; use `cacheHits` and
   `items` for the hit rate.

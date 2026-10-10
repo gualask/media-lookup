@@ -26,6 +26,11 @@ describe('handleRequest', () => {
       'https://www.youtube.com/results?search_query=Dune%20-%20Parte%20due%202024%20trailer%20italiano',
     );
     expect(html).not.toContain('posterPath=');
+    expect(html).toContain('href="https://www.themoviedb.org"');
+    expect(html).toContain(
+      'This product uses the TMDB API but is not endorsed or certified by TMDB.',
+    );
+    expect(html).toContain('<svg');
   });
 
   it('serves a cacheable favicon', async () => {
@@ -45,7 +50,7 @@ describe('handleRequest', () => {
     expect(await response.text()).toContain('<svg');
   });
 
-  it('renders a missing overview notice without client fallback controls', async () => {
+  it('renders a missing overview notice without calling the protected fallback', async () => {
     const provider = new FakeMediaProvider();
     provider.lookupResult = {
       type: 'movie',
@@ -66,7 +71,6 @@ describe('handleRequest', () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain('Trama italiana non disponibile.');
-    expect(html).not.toContain('<script');
     expect(html).not.toContain('/translate');
   });
 
@@ -202,6 +206,41 @@ describe('handleRequest', () => {
     expect(
       lookupCache.entries.get(lookupCacheKey({ type: 'movie', title: 'New', language: 'it-IT' })),
     ).toMatchObject({ status: 'found', origin: 'lookup' });
+  });
+
+  it('fails only the batch item whose TMDB request failed', async () => {
+    const provider = new FakeMediaProvider();
+    provider.failingTitles.add('Busy');
+    const metrics = new MemoryMetricsPort();
+    const lookupCache = new MemoryLookupCachePort();
+
+    const response = await handleRequest(
+      new Request('https://example.com/lookup/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [
+            { type: 'movie', title: 'Dune', year: 2024 },
+            { type: 'movie', title: 'Busy' },
+          ],
+        }),
+      }),
+      createTestDeps({ lookupCache, metrics, provider }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      results: [
+        expect.objectContaining({ index: 0, status: 'found' }),
+        { index: 1, status: 'error', error: { message: 'TMDB API request failed (429)' } },
+      ],
+    });
+    expect(
+      lookupCache.entries.has(lookupCacheKey({ type: 'movie', title: 'Busy', language: 'it-IT' })),
+    ).toBe(false);
+    expect(metrics.events).toEqual([
+      expect.objectContaining({ route: 'lookup_batch', status: 'ok', items: 2, errors: 1 }),
+    ]);
   });
 
   it('accepts lookup batches up to 15 items and rejects larger ones', async () => {

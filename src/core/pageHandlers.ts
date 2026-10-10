@@ -26,7 +26,7 @@ export async function handlePage(deps: Deps): Promise<Response> {
     language: deps.config.defaultLanguage,
   });
 
-  return htmlResponse(renderPreviewPage(displaySnapshot));
+  return htmlResponse(renderPreviewPage(displaySnapshot, deps.config.dailyRefreshTimeZone));
 }
 
 export function handleFavicon(): Response {

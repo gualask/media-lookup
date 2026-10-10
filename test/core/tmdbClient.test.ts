@@ -50,6 +50,13 @@ describe('TmdbMediaProvider daily snapshot', () => {
               overview: 'Trama completa.',
               poster_path: '/dune.jpg',
             },
+            {
+              id: 9,
+              title: 'Terminator 2 - Il giorno del giudizio',
+              release_date: '1991-07-01',
+              overview: 'Riedizione in sala.',
+              poster_path: '/t2.jpg',
+            },
           ],
         });
       }
@@ -92,11 +99,37 @@ describe('TmdbMediaProvider daily snapshot', () => {
 
       if (
         url.pathname === '/3/discover/tv' &&
-        url.searchParams.get('air_date.gte') === '2026-05-20' &&
-        url.searchParams.get('air_date.lte') === '2026-06-03'
+        url.searchParams.get('first_air_date.gte') === '2026-04-04' &&
+        url.searchParams.get('first_air_date.lte') === '2026-06-03'
       ) {
         return jsonResponse({
           results: [
+            {
+              id: 7,
+              name: 'Lanterns',
+              first_air_date: '2026-05-10',
+              overview: 'Serie appena iniziata.',
+              poster_path: '/lanterns.jpg',
+            },
+          ],
+        });
+      }
+
+      if (
+        url.pathname === '/3/discover/tv' &&
+        url.searchParams.get('air_date.gte') === '2026-05-20' &&
+        url.searchParams.get('air_date.lte') === '2026-06-03' &&
+        url.searchParams.get('first_air_date.gte') === '2016-06-03'
+      ) {
+        return jsonResponse({
+          results: [
+            {
+              id: 7,
+              name: 'Lanterns',
+              first_air_date: '2026-05-10',
+              overview: 'Gia tra le serie nuove.',
+              poster_path: '/lanterns.jpg',
+            },
             {
               id: 4,
               name: 'The Last of Us',
@@ -110,24 +143,17 @@ describe('TmdbMediaProvider daily snapshot', () => {
 
       if (
         url.pathname === '/3/discover/tv' &&
-        url.searchParams.get('air_date.gte') === '2026-06-04' &&
-        url.searchParams.get('air_date.lte') === '2026-06-17'
+        url.searchParams.get('first_air_date.gte') === '2026-06-04' &&
+        url.searchParams.get('first_air_date.lte') === '2026-08-02'
       ) {
         return jsonResponse({
           results: [
             {
-              id: 4,
-              name: 'The Last of Us',
-              first_air_date: '2023-01-15',
-              overview: 'Serie gia iniziata, episodio in arrivo.',
-              poster_path: '/last-of-us.jpg',
-            },
-            {
-              id: 5,
-              name: 'Stranger Things',
-              first_air_date: '2016-07-15',
-              overview: 'Serie gia iniziata, episodio in arrivo.',
-              poster_path: '/stranger-things.jpg',
+              id: 8,
+              name: 'Blade Runner 2099',
+              first_air_date: '2026-07-01',
+              overview: 'Serie in arrivo.',
+              poster_path: '/blade-runner.jpg',
             },
           ],
         });
@@ -160,22 +186,27 @@ describe('TmdbMediaProvider daily snapshot', () => {
         source: 'movie_theatrical_upcoming',
       }),
       expect.objectContaining({
+        remoteId: '7',
+        title: 'Lanterns',
+        source: 'tv_premiere_recent',
+      }),
+      expect.objectContaining({
         remoteId: '4',
         title: 'The Last of Us',
         year: 2023,
         source: 'tv_recent_episodes',
       }),
       expect.objectContaining({
-        remoteId: '5',
-        title: 'Stranger Things',
-        year: 2016,
-        source: 'tv_upcoming_episodes',
+        remoteId: '8',
+        title: 'Blade Runner 2099',
+        source: 'tv_premiere_upcoming',
       }),
     ]);
+    expect(snapshot.items.some((item) => item.title.startsWith('Terminator'))).toBe(false);
     expect(snapshot.items.some((item) => item.title === 'கர')).toBe(false);
     expect(snapshot.items.some((item) => item.title === 'Matrix')).toBe(false);
     expect(snapshot.items.filter((item) => item.title === 'Hail Mary')).toHaveLength(1);
-    expect(requestedUrls).toHaveLength(6);
+    expect(requestedUrls).toHaveLength(7);
     expect(requestedUrls.every((url) => url.searchParams.get('language') === 'it-IT')).toBe(true);
     expect(
       requestedUrls
@@ -197,7 +228,8 @@ describe('TmdbMediaProvider daily snapshot', () => {
         .every(
           (url) =>
             url.searchParams.get('timezone') === 'Europe/Rome' &&
-            url.searchParams.get('with_type') === '4',
+            url.searchParams.get('with_type') === '2|4' &&
+            url.searchParams.get('without_genres') === '10766',
         ),
     ).toBe(true);
     expect(
@@ -280,7 +312,7 @@ describe('TmdbMediaProvider lookup', () => {
     ).resolves.toMatchObject({ remoteId: '2316', match: 'uncertain' });
   });
 
-  it('marks a title-only match as uncertain when the first result has another title', async () => {
+  it('prefers the only exact title over a more relevant result with another title', async () => {
     const provider = searchProvider([
       { id: 693134, title: 'Dune - Parte due', release_date: '2024-02-27' },
       { id: 438631, title: 'Dune', release_date: '2021-09-15' },
@@ -288,7 +320,42 @@ describe('TmdbMediaProvider lookup', () => {
 
     await expect(
       provider.lookup({ type: 'movie', title: 'Dune', language: 'it-IT' }),
+    ).resolves.toMatchObject({ remoteId: '438631', match: 'title' });
+  });
+
+  it('keeps a title-only match uncertain when the results have no exact title', async () => {
+    const provider = searchProvider([
+      { id: 693134, title: 'Dune - Parte due', release_date: '2024-02-27' },
+    ]);
+
+    await expect(
+      provider.lookup({ type: 'movie', title: 'Dune', language: 'it-IT' }),
     ).resolves.toMatchObject({ remoteId: '693134', match: 'uncertain' });
+  });
+
+  it('searches movies by any release year and prefers the exact title', async () => {
+    const requestedUrls: URL[] = [];
+    const fetchFn = async (input: RequestInfo | URL) => {
+      requestedUrls.push(new URL(input.toString()));
+      return jsonResponse({
+        results: [
+          { id: 1, title: 'El indefinido. La crítica de La la land', release_date: '2017-02-01' },
+          { id: 313369, title: 'La La Land', release_date: '2016-12-01' },
+        ],
+      });
+    };
+    const provider = new TmdbMediaProvider('token', fetchFn as typeof fetch);
+
+    const metadata = await provider.lookup({
+      type: 'movie',
+      title: 'La La Land',
+      year: 2017,
+      language: 'it-IT',
+    });
+
+    expect(requestedUrls[0]?.searchParams.get('year')).toBe('2017');
+    expect(requestedUrls[0]?.searchParams.has('primary_release_year')).toBe(false);
+    expect(metadata).toMatchObject({ remoteId: '313369', year: 2016, match: 'year' });
   });
 });
 
@@ -296,6 +363,41 @@ function searchProvider(results: unknown[]): TmdbMediaProvider {
   const fetchFn = async () => jsonResponse({ results });
   return new TmdbMediaProvider('token', fetchFn as typeof fetch);
 }
+
+describe('TmdbMediaProvider rate limiting', () => {
+  it('waits as told and retries once after a 429', async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const fetchFn = async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response('', { status: 429, headers: { 'Retry-After': '2' } })
+        : jsonResponse({ results: [{ id: 1396, name: 'Breaking Bad' }] });
+    };
+    const provider = new TmdbMediaProvider('token', fetchFn as typeof fetch, async (ms) => {
+      waits.push(ms);
+    });
+
+    await expect(
+      provider.lookup({ type: 'tv', title: 'Breaking Bad', language: 'it-IT' }),
+    ).resolves.toMatchObject({ remoteId: '1396' });
+    expect(calls).toBe(2);
+    expect(waits).toEqual([2000]);
+  });
+
+  it('fails after a second 429 and caps the wait', async () => {
+    const waits: number[] = [];
+    const fetchFn = async () => new Response('', { status: 429, headers: { 'Retry-After': '60' } });
+    const provider = new TmdbMediaProvider('token', fetchFn as typeof fetch, async (ms) => {
+      waits.push(ms);
+    });
+
+    await expect(
+      provider.lookup({ type: 'tv', title: 'Breaking Bad', language: 'it-IT' }),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(waits).toEqual([3000]);
+  });
+});
 
 describe('TmdbMediaProvider overview fallback', () => {
   it('fetches a non empty overview for the requested language', async () => {

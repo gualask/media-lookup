@@ -20,6 +20,7 @@ export interface MetricsEvent {
   language: string;
   // Lookup routes only: how many items were requested and how many came from the KV cache.
   items?: number;
+  errors?: number;
   cacheHits?: number;
   warmupHits?: number;
 }

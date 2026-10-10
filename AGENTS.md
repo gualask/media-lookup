@@ -34,18 +34,25 @@ The desktop client is the only caller. These values must change together in both
 - Batch size: `LOOKUP_BATCH_MAX_ITEMS` in `src/core/lookupBatch.ts` must be at least the client's batch size (15). An oversized batch fails as a whole with 400, and the client marks every item as an error.
 - Languages: `SUPPORTED_LANGUAGES` in `wrangler.jsonc` must include every metadata language the client's settings offer.
 - Response shape: for `match: "uncertain"` the client drops the remote id and the year, so it neither auto-merges media nor overwrites an unknown year.
+- Batch items can fail on their own with `status: "error"`; the client stores them as errors and retries them with backoff.
 - The client ignores unknown response fields. Additive changes are safe in either deploy order; removals and renames are not.
 
 ## Cache And Data
 
 - The remote `DAILY_KV` namespace is live production data: `wrangler kv ... --remote` commands act on it. `pnpm dev` uses local simulated storage. Do not write or delete remote keys by hand unless the user asks.
-- Lookup cache keys carry a version (`lookup:v2` in `src/core/cacheKeys.ts`). Bump it whenever the cached entry shape changes, so old entries are no longer read and expire on their TTL.
+- Lookup cache keys carry a version (`lookup:v3` in `src/core/cacheKeys.ts`). Bump it whenever the cached entry shape or the way results are chosen changes, so old entries are no longer read and expire on their TTL.
 - Count KV writes in any new feature: the Free plan allows 1,000 per day. Each lookup miss writes one key; a daily snapshot refresh writes about 90 warmup keys.
+
+## TMDB
+
+- TMDB is used only by this Worker, and the home page is the product that shows its data: keep the footer attribution (approved logo from `src/core/tmdbLogo.ts`, unmodified and smaller than the page title, link to themoviedb.org, required notice).
+- Movie searches send `year`, not `primary_release_year`: release names often carry the local release year.
+- TMDB allows about 40 requests per second; on `429` the client waits for `Retry-After` and retries once.
 
 ## Cloudflare Free Plan Limits
 
 - CPU: 10 ms per request. A batch of 15 uncached lookups measured about 12 ms, and the daily snapshot refresh 10 to 15 ms; no request has failed yet. Check `pnpm analytics` for a status other than `success` after changes that add work per request.
-- Subrequests: 50 external `fetch` calls per request. A batch makes at most one TMDB call per item; the snapshot makes 6.
+- Subrequests: 50 external `fetch` calls per request. A batch makes at most one TMDB call per item, two with a `429` retry; the snapshot makes 7.
 - Workers Logs keeps 3 days of events.
 - Verify limits in the current Cloudflare docs before relying on them; they change.
 
