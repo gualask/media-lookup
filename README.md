@@ -398,6 +398,20 @@ event with:
 route, cache, provider, tmdbCalls, status, mediaType, language
 ```
 
+Lookup routes also add:
+
+```text
+items, cacheHits, warmupHits
+```
+
+`warmupHits` counts KV hits written by the daily snapshot warmup rather than by
+an earlier lookup. Entries written before this field existed count as hits but
+not as warmup hits.
+
+Workers Logs is enabled in `wrangler.jsonc` (`observability`), so these events
+and the per-request invocation logs, which include CPU time, can be queried in
+the Cloudflare dashboard. The Free plan keeps 200,000 events per day for 3 days.
+
 Current route values:
 
 - `page`
@@ -418,7 +432,9 @@ Current behavior:
 - `/` records `page` with `cache=hit` when the daily snapshot is reused.
 - `/` records `page` with `cache=miss` when it triggered a refresh.
 - A refresh also records `daily_refresh` with `tmdbCalls=6`.
-- `/lookup`, `/lookup/batch`, and `/translate` record `hit` or `miss`.
+- `/lookup`, `/lookup/batch`, and `/translate` record `hit` or `miss`. A batch
+  records `miss` when at least one item missed the cache; use `cacheHits` and
+  `items` for the hit rate.
 - `/daily` records `bypass`.
 
 Parse errors, authorization failures, rate-limit failures, and favicon requests

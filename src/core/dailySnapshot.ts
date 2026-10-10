@@ -108,7 +108,7 @@ async function putLookupCacheItem(
   try {
     await deps.lookupCache.put(
       cacheKey,
-      { status: 'found', metadata: snapshotItemToMetadata(item) },
+      { status: 'found', metadata: snapshotItemToMetadata(item), origin: 'warmup' },
       deps.config.cacheTtlSeconds,
     );
   } catch (error) {

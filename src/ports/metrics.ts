@@ -18,6 +18,10 @@ export interface MetricsEvent {
   status: MetricsStatus;
   mediaType: MediaType | 'none';
   language: string;
+  // Lookup routes only: how many items were requested and how many came from the KV cache.
+  items?: number;
+  cacheHits?: number;
+  warmupHits?: number;
 }
 
 export interface MetricsPort {

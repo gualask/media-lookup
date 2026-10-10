@@ -151,6 +151,57 @@ describe('handleRequest', () => {
     ).toEqual({ status: 'not_found' });
   });
 
+  it('records cache and warmup hits per lookup batch', async () => {
+    const provider = new FakeMediaProvider();
+    const metrics = new MemoryMetricsPort();
+    const lookupCache = new MemoryLookupCachePort();
+    const metadata = provider.lookupResult;
+
+    if (!metadata) {
+      throw new Error('Expected default lookup result');
+    }
+
+    lookupCache.entries.set(lookupCacheKey({ type: 'movie', title: 'Warm', language: 'it-IT' }), {
+      status: 'found',
+      metadata,
+      origin: 'warmup',
+    });
+    lookupCache.entries.set(lookupCacheKey({ type: 'movie', title: 'Seen', language: 'it-IT' }), {
+      status: 'found',
+      metadata,
+      origin: 'lookup',
+    });
+
+    await handleRequest(
+      new Request('https://example.com/lookup/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [
+            { type: 'movie', title: 'Warm' },
+            { type: 'movie', title: 'Seen' },
+            { type: 'movie', title: 'New' },
+          ],
+        }),
+      }),
+      createTestDeps({ lookupCache, metrics, provider }),
+    );
+
+    expect(provider.lookupCalls).toBe(1);
+    expect(metrics.events).toEqual([
+      expect.objectContaining({
+        route: 'lookup_batch',
+        tmdbCalls: 1,
+        items: 3,
+        cacheHits: 2,
+        warmupHits: 1,
+      }),
+    ]);
+    expect(
+      lookupCache.entries.get(lookupCacheKey({ type: 'movie', title: 'New', language: 'it-IT' })),
+    ).toMatchObject({ status: 'found', origin: 'lookup' });
+  });
+
   it('accepts lookup batches up to 15 items and rejects larger ones', async () => {
     const provider = new FakeMediaProvider();
     const deps = createTestDeps({ provider });

@@ -1,7 +1,7 @@
 import type { Deps } from '../core/deps';
 import { TmdbMediaProvider } from '../core/tmdbClient';
 import { type AppConfig, CACHE_TTL_SECONDS, type MediaMetadata } from '../core/types';
-import type { LookupCacheEntry, LookupCachePort } from '../ports/lookupCache';
+import type { LookupCacheEntry, LookupCacheOrigin, LookupCachePort } from '../ports/lookupCache';
 import type { MetricsEvent, MetricsPort } from '../ports/metrics';
 import type { RateLimiterPort, RateLimitScope } from '../ports/rateLimiter';
 import type { StoragePort, StoragePutOptions } from '../ports/storage';
@@ -107,10 +107,20 @@ function lookupCacheEntry(value: unknown): LookupCacheEntry | null {
   }
 
   if (candidate.status === 'found' && isMediaMetadata(candidate.metadata)) {
-    return { status: 'found', metadata: candidate.metadata };
+    const origin = (value as { origin?: unknown }).origin;
+
+    return {
+      status: 'found',
+      metadata: candidate.metadata,
+      ...(isLookupCacheOrigin(origin) ? { origin } : {}),
+    };
   }
 
   return null;
+}
+
+function isLookupCacheOrigin(value: unknown): value is LookupCacheOrigin {
+  return value === 'lookup' || value === 'warmup';
 }
 
 function isMediaMetadata(value: unknown): value is MediaMetadata {

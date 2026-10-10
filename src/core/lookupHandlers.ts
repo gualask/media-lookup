@@ -1,4 +1,4 @@
-import type { LookupCacheEntry } from '../ports/lookupCache';
+import type { LookupCacheEntry, LookupCacheOrigin } from '../ports/lookupCache';
 import { lookupCacheKey } from './cacheKeys';
 import type { Deps } from './deps';
 import { parseLookupBatchRequest } from './lookupBatch';
@@ -16,6 +16,7 @@ type LookupResolution =
       status: 'found';
       metadata: MediaMetadata;
       cache: 'hit' | 'miss';
+      origin?: LookupCacheOrigin;
       tmdbCalls: number;
     }
   | {
@@ -46,6 +47,7 @@ export async function handleLookup(deps: Deps, route: LookupRoute): Promise<Resp
     status: resolution.status === 'found' ? 'ok' : 'not_found',
     mediaType: route.type,
     language: route.language,
+    ...lookupCounts([resolution]),
   });
 
   if (resolution.status === 'found') {
@@ -92,6 +94,7 @@ export async function handleLookupBatch(request: Request, deps: Deps): Promise<R
     status: results.some((result) => result.status === 'found') ? 'ok' : 'not_found',
     mediaType: commonValue(parsed.items.map((item) => item.type)) ?? 'none',
     language: commonValue(parsed.items.map((item) => item.language)) ?? 'mixed',
+    ...lookupCounts(resolutions),
   });
 
   return jsonResponse({ results }, { status: 200 });
@@ -107,6 +110,7 @@ async function resolveLookup(deps: Deps, params: LookupParams): Promise<LookupRe
           status: 'found',
           metadata: cached.metadata,
           cache: 'hit',
+          origin: cached.origin,
           tmdbCalls: 0,
         }
       : {
@@ -122,7 +126,7 @@ async function resolveLookup(deps: Deps, params: LookupParams): Promise<LookupRe
     await safeLookupCachePut(
       deps,
       cacheKey,
-      { status: 'found', metadata },
+      { status: 'found', metadata, origin: 'lookup' },
       deps.config.cacheTtlSeconds,
     );
 
@@ -191,6 +195,16 @@ async function mapWithConcurrency<T, U>(
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   return results;
+}
+
+function lookupCounts(resolutions: readonly LookupResolution[]) {
+  return {
+    items: resolutions.length,
+    cacheHits: resolutions.filter((resolution) => resolution.cache === 'hit').length,
+    warmupHits: resolutions.filter(
+      (resolution) => resolution.status === 'found' && resolution.origin === 'warmup',
+    ).length,
+  };
 }
 
 function commonValue<T extends string>(values: readonly T[]): T | null {
