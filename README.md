@@ -459,6 +459,39 @@ Current behavior:
 Parse errors, authorization failures, rate-limit failures, and favicon requests
 do not currently emit metrics events.
 
+## Analytics
+
+```sh
+pnpm analytics            # last 7 days
+pnpm analytics --days=30
+```
+
+Prints two tables:
+
+- Lookup cache per route from Workers Logs: events, items, cache hits and hit
+  rate, warmup hits, TMDB calls. The Free plan keeps logs for 3 days, so this
+  table never covers more than that.
+- Invocations per day from the GraphQL Analytics API: requests, errors,
+  subrequests, CPU p50, p99 and max. The Free plan allows 10 ms of CPU per
+  request; a status other than `success` (for example `exceededResources`)
+  means requests failed.
+
+Credentials live in `.env.cloudflare`, ignored by Git:
+
+```text
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_API_TOKEN=...
+```
+
+The token needs Account → Workers Observability → Edit (the telemetry query
+endpoint requires it) and Account → Account Analytics → Read.
+
+Keep this file named `.env.cloudflare`, not `.env`. Wrangler loads `.env` on
+every command: a `CLOUDFLARE_API_TOKEN` there would replace the `wrangler login`
+session for deploys and other commands, and `wrangler dev` can expose `.env`
+values to the Worker's `env`. Wrangler only reads `.env.<name>` when a command
+runs with `--env <name>`, and this project has no `cloudflare` environment.
+
 ## Client Integration
 
 Single lookup:
