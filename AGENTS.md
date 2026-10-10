@@ -31,7 +31,7 @@ This repository is public. Do not name the client application or its files in co
 
 The desktop client is the only caller. These values must change together in both repositories (client-side locations are in `CLAUDE.local.md`):
 
-- Batch size: `LOOKUP_BATCH_MAX_ITEMS` in `src/core/lookupBatch.ts` must be at least the client's batch size (15). An oversized batch fails as a whole with 400, and the client marks every item as an error.
+- Batch size: `LOOKUP_BATCH_MAX_ITEMS` in `src/core/lookupBatch.ts` must be at least the client's batch size (10). An oversized batch fails as a whole with 400, and the client marks every item as an error.
 - Languages: `SUPPORTED_LANGUAGES` in `wrangler.jsonc` must include every metadata language the client's settings offer.
 - Response shape: for `match: "uncertain"` the client drops the remote id and the year, so it neither auto-merges media nor overwrites an unknown year.
 - Batch items can fail on their own with `status: "error"`; the client stores them as errors and retries them with backoff.
@@ -51,7 +51,7 @@ The desktop client is the only caller. These values must change together in both
 
 ## Cloudflare Free Plan Limits
 
-- CPU: 10 ms per request. A batch of 15 uncached lookups measured about 12 ms, and the daily snapshot refresh 10 to 15 ms; no request has failed yet. Check `pnpm analytics` for a status other than `success` after changes that add work per request.
+- CPU: 10 ms per request, with some tolerance for infrequent overruns; consistent overruns end in error 1102 (`exceededCpu`). Uncached lookups cost about 1 ms each, which is why the client sends batches of 10; the daily snapshot refresh measured 17 ms once a day. Check `pnpm analytics` for a status other than `success` after changes that add work per request.
 - Subrequests: 50 external `fetch` calls per request. A batch makes at most one TMDB call per item, two with a `429` retry; the snapshot makes 7.
 - Workers Logs keeps 3 days of events.
 - Verify limits in the current Cloudflare docs before relying on them; they change.

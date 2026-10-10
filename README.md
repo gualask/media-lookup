@@ -539,9 +539,10 @@ For desktop batch hydration, prefer:
 <WORKER_URL>/lookup/batch
 ```
 
-with up to 15 items per request. The desktop client sends batches of 15, and
-its language setting offers the same languages as `SUPPORTED_LANGUAGES`: change
-both sides together.
+with up to 15 items per request. The desktop client sends batches of 10: a
+batch of uncached titles costs about 1 ms of CPU per title, and the Workers Free
+plan allows 10 ms per request. Its language setting offers the same languages
+as `SUPPORTED_LANGUAGES`: change both sides together.
 
 Protected API routes require:
 
