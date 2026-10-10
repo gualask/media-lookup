@@ -61,5 +61,5 @@ built by `src/core/dailySnapshot.ts`.
 ## Testing
 
 Core behavior is tested with regular Vitest tests under `test/core/`.
-Cloudflare runtime wiring is tested with `@cloudflare/vitest-pool-workers` under
+Cloudflare runtime wiring is tested with `@cloudflare/vitest-plugin` under
 `test/worker/`.
