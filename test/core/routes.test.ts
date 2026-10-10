@@ -95,39 +95,6 @@ describe('parseRoute', () => {
     }
   });
 
-  it('routes overview translation requests', () => {
-    const parsed = parseRoute(
-      new Request('https://example.com/translate?type=movie&id=693134&language=en-US'),
-      testConfig,
-    );
-
-    expect(parsed).toEqual({
-      ok: true,
-      route: {
-        kind: 'translate',
-        type: 'movie',
-        remoteId: '693134',
-        language: 'en-US',
-      },
-    });
-  });
-
-  it('rejects overview translation requests with non numeric ids', async () => {
-    const parsed = parseRoute(
-      new Request('https://example.com/translate?type=movie&id=abc&language=it-IT'),
-      testConfig,
-    );
-
-    expect(parsed.ok).toBe(false);
-
-    if (!parsed.ok) {
-      expect(parsed.response.status).toBe(400);
-      await expect(parsed.response.json()).resolves.toMatchObject({
-        error: { code: 'bad_request' },
-      });
-    }
-  });
-
   it('rejects obsolete poster query params', async () => {
     const parsed = parseRoute(
       new Request('https://example.com/?posterPath=%2Fabc123.jpg&size=w185'),

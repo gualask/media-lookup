@@ -4,6 +4,16 @@
 contract handling, application behavior, external provider access, and
 Cloudflare-specific wiring stay separate.
 
+```text
+src/
+  index.ts           Worker entry point
+  core/              HTTP contract and application behavior, no Cloudflare or TMDB APIs
+  ports/             interfaces the core depends on
+  providers/tmdb/    TMDB adapter behind the media provider port
+  platforms/         Cloudflare adapters and dependency wiring
+scripts/analytics.mjs  cache and CPU figures from the Cloudflare APIs
+```
+
 ## Runtime Flow
 
 Every request enters through `src/index.ts`, which builds Cloudflare dependencies
@@ -19,47 +29,58 @@ with `src/platforms/cloudflare.ts` and passes the request to
 
 ## Core Modules
 
-- `src/core/routes.ts` owns URL, method, and query-string parsing.
-- `src/core/requestGuards.ts` owns rate limiting and Bearer authorization.
-- `src/core/lookupHandlers.ts` owns `/lookup`, `/lookup/batch`, lookup cache
-  reads/writes, and TMDB lookup orchestration.
-- `src/core/lookupBatch.ts` owns JSON body validation for `/lookup/batch`.
-- `src/core/overviewFallback.ts` owns `/translate` and cached English overview
-  hydration for the home page.
-- `src/core/dailyHandler.ts` owns the `/daily` diagnostic endpoint.
-- `src/core/dailySnapshot.ts` owns daily snapshot freshness and lookup cache
-  warmup.
-- `src/core/tmdbClient.ts` owns TMDB API calls and TMDB response mapping.
-- `src/core/htmlPage.ts` owns public home page rendering.
-- `src/core/responses.ts` owns response helpers and common error shapes.
+- `routes.ts` owns URL, method, and query-string parsing.
+- `requestGuards.ts` owns rate limiting and Bearer authorization.
+- `lookupHandlers.ts` owns `/lookup` and `/lookup/batch`: cache reads and
+  writes, provider calls, per-item batch failures, and lookup metrics.
+- `lookupBatch.ts` owns JSON body validation for `/lookup/batch`.
+- `lookupCache.ts` owns the lookup cache entry format and its validation on top
+  of the storage port.
+- `cacheKeys.ts` builds lookup cache keys; `titles.ts` normalizes titles for
+  keys and for matching; `dates.ts` handles `YYYY-MM-DD` date keys.
+- `dailySources.ts` decides what the home page calls news: which sections exist,
+  their date windows, re-release and script filters, and dedupe order. It asks
+  the provider through generic discover queries.
+- `dailySnapshot.ts` owns snapshot freshness, storage, the fallback to the
+  previous snapshot when a refresh fails, and the lookup cache warmup.
+- `dailyHandler.ts` owns the `/daily` diagnostic endpoint.
+- `pageHandlers.ts` owns `/` and the favicon routes.
+- `htmlPage.ts` renders the home page; `homeStyles.ts` holds its stylesheet and
+  `tmdbLogo.ts` the TMDB attribution logo.
+- `responses.ts` owns response helpers and common error shapes.
 
 ## Ports And Adapters
 
-Core code depends on ports in `src/ports/` instead of direct Cloudflare APIs:
+Core code depends on ports in `src/ports/` instead of direct Cloudflare or TMDB
+APIs:
 
-- `lookupCache.ts`
-- `storage.ts`
-- `mediaProvider.ts`
+- `storage.ts`: text values with an optional TTL. Daily snapshots and lookup
+  cache entries both live there.
+- `mediaProvider.ts`: title lookup, discover queries for the daily snapshot,
+  and a request count for metrics.
 - `rateLimiter.ts`
 - `metrics.ts`
 
+`src/providers/tmdb/` implements the media provider port: `client.ts` sends
+authenticated requests to TMDB and retries once on `429`; `provider.ts` builds
+search and discover requests, maps TMDB results, and picks the best search
+result with its `match`.
+
 `src/platforms/cloudflare.ts` is the Cloudflare adapter layer. It reads env vars,
 binds KV, adapts Worker Rate Limit bindings, creates the TMDB provider, and
-writes metrics events to the console.
+writes metrics events to the console, which Workers Logs keeps.
 
 ## Data Boundaries
 
 All persistent application data uses the `DAILY_KV` binding:
 
-- daily snapshots
-- lookup cache entries
-- English overview fallback cache entries
-
-Lookup cache keys are built by `src/core/cacheKeys.ts`. Daily snapshot keys are
-built by `src/core/dailySnapshot.ts`.
+- daily snapshots (`daily:v5:<language>`)
+- lookup cache entries (`lookup:v3:...`), written by lookups and by the daily
+  snapshot warmup
 
 ## Testing
 
-Core behavior is tested with regular Vitest tests under `test/core/`.
-Cloudflare runtime wiring is tested with `@cloudflare/vitest-plugin` under
-`test/worker/`.
+Core behavior is tested with regular Vitest tests under `test/core/`, with
+in-memory ports from `test/core/helpers.ts`. The TMDB adapter is tested under
+`test/providers/` against a stubbed `fetch`. Cloudflare runtime wiring is tested
+with `@cloudflare/vitest-plugin` under `test/worker/`.

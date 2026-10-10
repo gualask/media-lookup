@@ -27,17 +27,6 @@ export interface LookupParams {
   language: string;
 }
 
-export interface OverviewTranslationParams {
-  type: MediaType;
-  remoteId: string;
-  language: string;
-}
-
-export interface OverviewTranslation {
-  overview: string;
-  language: string;
-}
-
 export interface DailySnapshotParams {
   language: string;
   now: Date;

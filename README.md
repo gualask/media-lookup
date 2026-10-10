@@ -14,8 +14,6 @@ the daily media snapshot once per day and writes lookup-compatible cache entries
   day TTL for misses.
 - Direct TMDB image CDN usage for posters. The Worker does not proxy poster
   bytes.
-- Lazy English overview fallback through TMDB detail lookup, not machine
-  translation.
 - Bearer-protected API routes for the desktop client.
 - Worker Rate Limit bindings for public and API traffic.
 - Inline SVG favicon served by the Worker.
@@ -52,7 +50,6 @@ API routes:
 
 - `GET /lookup`
 - `POST /lookup/batch`
-- `GET /translate`
 - `GET /daily`
 
 When `API_BEARER_TOKEN` is configured, every API route requires:
@@ -108,6 +105,10 @@ it is reused from KV and TMDB is not called. If it is missing or stale, the
 Worker calls TMDB, stores `daily:v5:<language>`, and warms lookup cache entries
 with the same keys used by `/lookup`.
 
+If the refresh fails (TMDB down, a `429` that persists), the page shows the
+previous snapshot and the next visit tries again. Only the very first refresh,
+with no snapshot stored yet, answers `502`.
+
 The rendered page:
 
 - Keeps a sticky top bar with the title, when the snapshot was generated (in
@@ -125,10 +126,6 @@ The rendered page:
 - Credits TMDB in the footer, as its attribution rules require: the approved
   logo, unmodified and smaller than the page title, linking to
   themoviedb.org, next to the required notice.
-
-The page cannot call the protected `/translate` endpoint itself. If an
-authorized call has already cached an English overview fallback, the home page
-shows it while rendering.
 
 ### Daily Sources
 
@@ -280,7 +277,8 @@ Rules:
 
 - `items` is required and cannot be empty.
 - Maximum batch size is 15 items. Larger batches return `400 batch_too_large`.
-- Each item uses the same fields as `/lookup`.
+- Each item uses the same fields as `/lookup`. A missing or blank `language`
+  means `DEFAULT_LANGUAGE`; a `language` that is not a string returns `400`.
 - In JSON, `year` must be a four digit number, not a string.
 - One invalid item, including an unsupported `language`, rejects the whole
   batch with `400`.
@@ -321,41 +319,6 @@ Response:
 
 The batch route exists to reduce Worker request bursts from desktop clients. It
 does not merge multiple TMDB searches into one upstream TMDB API call.
-
-## English Overview Fallback
-
-```http
-GET /translate?type=movie&id=693134&language=en-US
-GET /translate?type=tv&id=1399&language=en-US
-```
-
-This endpoint is intentionally lazy. Clients should call it only after explicit
-user action when the localized `overview` is empty.
-
-It does not perform machine translation. It asks TMDB for the media detail in
-the requested language, normally `en-US`, and returns a non-empty overview when
-TMDB has one.
-
-Query parameters:
-
-- `type`: required, `movie` or `tv`.
-- `id`: required TMDB numeric id.
-- `language`: optional, defaults to `DEFAULT_LANGUAGE`.
-
-Unexpected query parameters return `400`. Unsupported languages return `400`.
-Missing overview fallback returns `404`.
-
-Response:
-
-```json
-{
-  "overview": "English overview from TMDB.",
-  "language": "en-US"
-}
-```
-
-Successful fallbacks are cached for 30 days. Missing fallbacks are cached for 1
-day.
 
 ## Daily Snapshot Diagnostic
 
@@ -421,12 +384,6 @@ daily:v5:<language>
 The daily snapshot is stored without a KV expiration TTL. Freshness is decided
 by comparing `generatedAt` with the current date in `DAILY_REFRESH_TIME_ZONE`.
 
-English overview fallback:
-
-```text
-overview_fallback:v1:<language>:<type>:<remoteId>
-```
-
 Lookup cache entries store either a found metadata result, with its `match`
 and whether a lookup or the daily warmup wrote it, or a short negative
 `not_found` entry. Warmup entries are `year` matches when TMDB has a release
@@ -439,8 +396,6 @@ TTL:
 
 - lookup metadata: 30 days
 - lookup not found: 1 day
-- overview fallback success: 30 days
-- overview fallback not found: 1 day
 - daily snapshot: refreshed lazily by date
 
 ## Metrics
@@ -472,7 +427,6 @@ Current route values:
 - `daily_refresh`
 - `lookup`
 - `lookup_batch`
-- `translate`
 - `daily`
 
 Cache values:
@@ -485,8 +439,11 @@ Current behavior:
 
 - `/` records `page` with `cache=hit` when the daily snapshot is reused.
 - `/` records `page` with `cache=miss` when it triggered a refresh.
-- A refresh also records `daily_refresh` with `tmdbCalls=7`.
-- `/lookup`, `/lookup/batch`, and `/translate` record `hit` or `miss`. A batch
+- A refresh also records `daily_refresh`, with `status=error` when it failed and
+  the previous snapshot was served.
+- `tmdbCalls` counts the requests actually sent to TMDB, retries after a `429`
+  included: 7 for a snapshot refresh without retries.
+- `/lookup` and `/lookup/batch` record `hit` or `miss`. A batch
   records `miss` when at least one item missed the cache; use `cacheHits` and
   `items` for the hit rate.
 - `/daily` records `bypass`.
@@ -551,20 +508,6 @@ Authorization: Bearer <API_BEARER_TOKEN>
 ```
 
 Use the returned `posterPath` to build a direct TMDB CDN image URL.
-
-If `overview` is empty, expose a user-triggered action in the client and call:
-
-```text
-<WORKER_URL>/translate?type=<movie|tv>&id=<remoteId>&language=en-US
-```
-
-Do not prefetch English fallbacks for every item. The endpoint is designed for
-explicit clicks so TMDB calls are not spent on titles the user never opens.
-
-If the client persists movie or TV metadata, it should store the recovered
-English overview after a successful fallback call. Future plain `/lookup`
-responses can still have an empty localized overview, because `/lookup` returns
-the localized TMDB search result and does not merge fallback cache entries.
 
 ## Configuration
 
@@ -662,7 +605,6 @@ Useful local URLs:
 ```text
 <WRANGLER_LOCAL_URL>/
 <WRANGLER_LOCAL_URL>/lookup?type=movie&title=Dune&year=2024&language=it-IT
-<WRANGLER_LOCAL_URL>/translate?type=movie&id=693134&language=en-US
 <WRANGLER_LOCAL_URL>/daily?language=it-IT
 ```
 
@@ -697,8 +639,8 @@ pnpm test:worker
 The Worker includes in-code fallback protection:
 
 - `/` is public and rate limited by `PUBLIC_RATE_LIMITER`.
-- `/lookup`, `/lookup/batch`, `/translate`, and `/daily` are rate limited by `API_RATE_LIMITER`.
-- `/lookup`, `/lookup/batch`, `/translate`, and `/daily` require
+- `/lookup`, `/lookup/batch`, and `/daily` are rate limited by `API_RATE_LIMITER`.
+- `/lookup`, `/lookup/batch`, and `/daily` require
   `Authorization: Bearer <API_BEARER_TOKEN>` when the secret is configured.
 - `/favicon.svg` and `/favicon.ico` bypass rate limiting and authorization.
 
@@ -709,7 +651,7 @@ example with Cloudflare WAF, Access, or rate limiting rules on a Cloudflare zone
 If a custom domain is added later, protect routes at the Cloudflare edge level:
 
 - Home `/`: public with rate limiting.
-- `/lookup`, `/lookup/batch`, and `/translate`: protected or rate-limited depending on how
+- `/lookup` and `/lookup/batch`: protected or rate-limited depending on how
   the client calls them.
 - `/daily`: diagnostic endpoint, should stay protected.
 

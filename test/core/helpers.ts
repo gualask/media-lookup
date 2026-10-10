@@ -1,22 +1,25 @@
+import { lookupCacheKey } from '../../src/core/cacheKeys';
 import type { Deps } from '../../src/core/deps';
 import { UpstreamProviderError } from '../../src/core/errors';
+import type { LookupCacheEntry } from '../../src/core/lookupCache';
 import {
   type AppConfig,
   CACHE_TTL_SECONDS,
-  type DailySnapshot,
-  type DailySnapshotParams,
   type LookupMetadata,
-  type OverviewTranslation,
+  type LookupParams,
 } from '../../src/core/types';
-import type { LookupCacheEntry, LookupCachePort } from '../../src/ports/lookupCache';
-import type { MediaProviderPort } from '../../src/ports/mediaProvider';
+import type {
+  DiscoveredMedia,
+  DiscoverQuery,
+  MediaProviderPort,
+} from '../../src/ports/mediaProvider';
 import type { MetricsEvent, MetricsPort } from '../../src/ports/metrics';
 import type {
   RateLimiterPort,
   RateLimitParams,
   RateLimitResult,
 } from '../../src/ports/rateLimiter';
-import type { StoragePort } from '../../src/ports/storage';
+import type { StoragePort, StoragePutOptions } from '../../src/ports/storage';
 
 export const testConfig: AppConfig = {
   tmdbToken: 'test-token',
@@ -30,7 +33,6 @@ export const testConfig: AppConfig = {
 export function createTestDeps(overrides: Partial<Deps> = {}): Deps {
   return {
     config: testConfig,
-    lookupCache: new MemoryLookupCachePort(),
     storage: new MemoryStoragePort(),
     metrics: new MemoryMetricsPort(),
     rateLimiter: new MemoryRateLimiterPort(),
@@ -40,32 +42,38 @@ export function createTestDeps(overrides: Partial<Deps> = {}): Deps {
   };
 }
 
-export class MemoryLookupCachePort implements LookupCachePort {
-  readonly entries = new Map<string, LookupCacheEntry>();
-
-  get(key: string): Promise<LookupCacheEntry | null> {
-    return Promise.resolve(this.entries.get(key) ?? null);
-  }
-
-  put(key: string, entry: LookupCacheEntry): Promise<void> {
-    this.entries.set(key, entry);
-    return Promise.resolve();
-  }
-}
-
 export class MemoryStoragePort implements StoragePort {
-  private readonly entries = new Map<string, string>();
+  readonly entries = new Map<string, string>();
+  readonly ttls = new Map<string, number | undefined>();
   putCalls = 0;
 
   getText(key: string): Promise<string | null> {
     return Promise.resolve(this.entries.get(key) ?? null);
   }
 
-  putText(key: string, value: string): Promise<void> {
+  putText(key: string, value: string, options: StoragePutOptions = {}): Promise<void> {
     this.putCalls += 1;
     this.entries.set(key, value);
+    this.ttls.set(key, options.ttlSeconds);
     return Promise.resolve();
   }
+}
+
+/** The lookup cache entry stored for these lookup params, if any. */
+export function storedLookup(
+  storage: MemoryStoragePort,
+  params: Omit<LookupParams, 'language'> & { language?: string },
+): LookupCacheEntry | undefined {
+  const value = storage.entries.get(lookupCacheKey({ language: 'it-IT', ...params }));
+  return value ? (JSON.parse(value) as LookupCacheEntry) : undefined;
+}
+
+export async function storeLookup(
+  storage: MemoryStoragePort,
+  params: Omit<LookupParams, 'language'> & { language?: string },
+  entry: LookupCacheEntry,
+): Promise<void> {
+  await storage.putText(lookupCacheKey({ language: 'it-IT', ...params }), JSON.stringify(entry));
 }
 
 export class MemoryMetricsPort implements MetricsPort {
@@ -87,11 +95,13 @@ export class MemoryRateLimiterPort implements RateLimiterPort {
 }
 
 export class FakeMediaProvider implements MediaProviderPort {
+  requestCount = 0;
   lookupCalls = 0;
+  /** Daily snapshot builds, counted by their trending query (one per build). */
+  snapshotCalls = 0;
   readonly lookupResults = new Map<string, LookupMetadata | null>();
   readonly failingTitles = new Set<string>();
-  translationCalls = 0;
-  snapshotCalls = 0;
+  discoverFails = false;
   lookupResult: LookupMetadata | null = {
     type: 'movie' as const,
     provider: 'tmdb' as const,
@@ -102,12 +112,9 @@ export class FakeMediaProvider implements MediaProviderPort {
     posterPath: '/abc123.jpg',
     match: 'year',
   };
-  translationResult: OverviewTranslation | null = {
-    overview: 'English overview recovered from TMDB',
-    language: 'en-US',
-  };
 
   async lookup(params: { title: string }) {
+    this.requestCount += 1;
     this.lookupCalls += 1;
     if (this.failingTitles.has(params.title)) {
       throw new UpstreamProviderError('TMDB API request failed', 429);
@@ -118,23 +125,22 @@ export class FakeMediaProvider implements MediaProviderPort {
     return this.lookupResult;
   }
 
-  async findOverviewTranslation() {
-    this.translationCalls += 1;
-    return this.translationResult;
-  }
+  /** Answers the trending query with `lookupResult`, recently released; every other one is empty. */
+  async discover(query: DiscoverQuery): Promise<DiscoveredMedia[]> {
+    this.requestCount += 1;
+    if (this.discoverFails) {
+      throw new UpstreamProviderError('TMDB API request failed', 503);
+    }
+    if (query.kind !== 'trending_movies') {
+      return [];
+    }
 
-  async buildDailySnapshot(params: DailySnapshotParams): Promise<DailySnapshot> {
     this.snapshotCalls += 1;
-    return {
-      generatedAt: params.now.toISOString(),
-      language: params.language,
-      items: this.lookupResult
-        ? [{ ...withoutMatch(this.lookupResult), source: 'movie_theatrical_recent' }]
-        : [],
-    };
-  }
-}
+    if (!this.lookupResult) {
+      return [];
+    }
 
-function withoutMatch({ match: _match, ...metadata }: LookupMetadata) {
-  return metadata;
+    const { match: _match, ...media } = this.lookupResult;
+    return [{ ...media, releaseDate: '2026-05-01' }];
+  }
 }

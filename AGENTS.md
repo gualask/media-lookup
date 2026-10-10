@@ -7,8 +7,10 @@
 This repository is public. Do not name the client application or its files in code, docs, tests or commit messages; write "the client" or "the desktop client". Local, uncommitted notes about the client live in `CLAUDE.local.md` (Git-ignored); if it is missing, ask the user where the client repository is.
 
 - `src/index.ts` builds Cloudflare dependencies (`src/platforms/cloudflare.ts`) and hands every request to `src/core/handleRequest.ts`, which only dispatches: parse route, rate limit, authorize, call the handler, map errors.
-- Core code in `src/core/` depends on the interfaces in `src/ports/`, never on Cloudflare APIs directly. Cloudflare specifics (KV, rate limit bindings, env vars) stay in `src/platforms/cloudflare.ts`.
-- Core tests in `test/core/` run on Node with fake ports from `test/core/helpers.ts`; `test/worker/` runs inside workerd through `@cloudflare/vitest-plugin`.
+- `src/core/` holds the HTTP contract and the product rules and depends only on the interfaces in `src/ports/`, never on Cloudflare or TMDB APIs. What the home page calls news lives in `src/core/dailySources.ts`.
+- `src/providers/tmdb/` is the TMDB adapter: HTTP client with the `429` retry, search and discover requests, result mapping and the choice of the best search result.
+- Cloudflare specifics (KV, rate limit bindings, env vars) stay in `src/platforms/cloudflare.ts`.
+- Core tests in `test/core/` run on Node with in-memory ports from `test/core/helpers.ts`; `test/providers/` tests the TMDB adapter against a stubbed `fetch`; `test/worker/` runs inside workerd through `@cloudflare/vitest-plugin`.
 
 ## Commands
 

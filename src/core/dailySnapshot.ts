@@ -1,8 +1,9 @@
 import { lookupCacheKey } from './cacheKeys';
+import { buildDailySnapshot } from './dailySources';
+import { dateKeyInTimeZone } from './dates';
 import type { Deps } from './deps';
+import { writeLookupCache } from './lookupCache';
 import type { DailySnapshot, DailySnapshotItem, LookupMetadata } from './types';
-
-const DAILY_SNAPSHOT_TMDB_CALLS = 7;
 
 export function dailySnapshotKey(language: string): string {
   return `daily:v5:${language}`;
@@ -38,19 +39,28 @@ export async function ensureDailySnapshot(
 ): Promise<EnsureDailySnapshotResult> {
   const existing = await readDailySnapshot(deps, language);
   const now = deps.now();
+  const timeZone = deps.config.dailyRefreshTimeZone;
 
-  if (existing && isSnapshotFresh(existing, now, deps.config.dailyRefreshTimeZone)) {
-    return {
-      snapshot: existing,
-      refreshed: false,
-    };
+  if (existing && isSnapshotFresh(existing, now, timeZone)) {
+    return { snapshot: existing, refreshed: false };
   }
 
-  const snapshot = await deps.provider.buildDailySnapshot({
-    language,
-    now,
-    timeZone: deps.config.dailyRefreshTimeZone,
-  });
+  const requestsBefore = deps.provider.requestCount;
+  let snapshot: DailySnapshot;
+
+  try {
+    snapshot = await buildDailySnapshot(deps.provider, { language, now, timeZone });
+  } catch (error) {
+    await recordRefresh(deps, language, requestsBefore, 'error');
+
+    // An older snapshot beats an error page; the next visit tries the refresh again.
+    if (existing) {
+      console.warn('Daily snapshot refresh failed, serving the previous one', error);
+      return { snapshot: existing, refreshed: false };
+    }
+
+    throw error;
+  }
 
   // A failed write (for example the daily KV write limit) still serves the fresh snapshot.
   // Warmup is skipped because its writes would fail the same way.
@@ -58,20 +68,25 @@ export async function ensureDailySnapshot(
     await warmLookupCacheFromSnapshot(deps, snapshot);
   }
 
+  await recordRefresh(deps, language, requestsBefore, 'ok');
+  return { snapshot, refreshed: true };
+}
+
+async function recordRefresh(
+  deps: Deps,
+  language: string,
+  requestsBefore: number,
+  status: 'ok' | 'error',
+): Promise<void> {
   await deps.metrics.record({
     route: 'daily_refresh',
     cache: 'miss',
     provider: 'tmdb',
-    tmdbCalls: DAILY_SNAPSHOT_TMDB_CALLS,
-    status: 'ok',
+    tmdbCalls: deps.provider.requestCount - requestsBefore,
+    status,
     mediaType: 'none',
     language,
   });
-
-  return {
-    snapshot,
-    refreshed: true,
-  };
 }
 
 async function safeStorePut(deps: Deps, key: string, value: string): Promise<boolean> {
@@ -84,36 +99,23 @@ async function safeStorePut(deps: Deps, key: string, value: string): Promise<boo
   }
 }
 
-export async function warmLookupCacheFromSnapshot(
-  deps: Deps,
-  snapshot: DailySnapshot,
-): Promise<void> {
+/** Writes each snapshot item under the key a lookup with the same title and year would use. */
+async function warmLookupCacheFromSnapshot(deps: Deps, snapshot: DailySnapshot): Promise<void> {
   await Promise.all(
-    snapshot.items.map((item) => putLookupCacheItem(deps, snapshot.language, item)),
+    snapshot.items.map((item) =>
+      writeLookupCache(
+        deps.storage,
+        lookupCacheKey({
+          type: item.type,
+          title: item.title,
+          year: item.year,
+          language: snapshot.language,
+        }),
+        { status: 'found', metadata: snapshotItemToMetadata(item), origin: 'warmup' },
+        deps.config.cacheTtlSeconds,
+      ),
+    ),
   );
-}
-
-async function putLookupCacheItem(
-  deps: Deps,
-  language: string,
-  item: DailySnapshotItem,
-): Promise<void> {
-  const cacheKey = lookupCacheKey({
-    type: item.type,
-    title: item.title,
-    year: item.year,
-    language,
-  });
-
-  try {
-    await deps.lookupCache.put(
-      cacheKey,
-      { status: 'found', metadata: snapshotItemToMetadata(item), origin: 'warmup' },
-      deps.config.cacheTtlSeconds,
-    );
-  } catch (error) {
-    console.warn('Lookup cache warmup failed', error);
-  }
 }
 
 // Warmup keys carry the TMDB year when there is one, so a lookup that hits them sent that year.
@@ -144,19 +146,7 @@ function isDailySnapshot(value: unknown): value is DailySnapshot {
 }
 
 function isSnapshotFresh(snapshot: DailySnapshot, now: Date, timeZone: string): boolean {
-  return dayKey(new Date(snapshot.generatedAt), timeZone) === dayKey(now, timeZone);
-}
-
-function dayKey(date: Date, timeZone: string): string {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  const parts = Object.fromEntries(
-    formatter.formatToParts(date).map((part) => [part.type, part.value]),
+  return (
+    dateKeyInTimeZone(new Date(snapshot.generatedAt), timeZone) === dateKeyInTimeZone(now, timeZone)
   );
-
-  return `${parts.year}-${parts.month}-${parts.day}`;
 }

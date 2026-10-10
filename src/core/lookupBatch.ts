@@ -91,8 +91,12 @@ function parseLookupBatchItem(
     return year;
   }
 
-  const language =
-    typeof value.language === 'string' ? value.language.trim() : config.defaultLanguage;
+  if (value.language !== undefined && typeof value.language !== 'string') {
+    return batchItemError(index, 'field "language" must be a string');
+  }
+
+  // Like the `language` query parameter: missing or blank means the default language.
+  const language = value.language?.trim() || config.defaultLanguage;
 
   if (!config.supportedLanguages.includes(language)) {
     return {

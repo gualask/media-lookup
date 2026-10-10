@@ -2,7 +2,6 @@ import { handleDaily } from './dailyHandler';
 import type { Deps } from './deps';
 import { handleError } from './errorHandler';
 import { handleLookup, handleLookupBatch } from './lookupHandlers';
-import { handleTranslate } from './overviewFallback';
 import { handleFavicon, handlePage } from './pageHandlers';
 import { enforceAuthorization, enforceRateLimit } from './requestGuards';
 import { parseRoute } from './routes';
@@ -36,8 +35,6 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
         return await handleLookup(deps, parsed.route);
       case 'lookup_batch':
         return await handleLookupBatch(request, deps);
-      case 'translate':
-        return await handleTranslate(deps, parsed.route);
       case 'daily':
         return await handleDaily(deps, parsed.route.language);
     }

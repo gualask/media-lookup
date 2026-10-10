@@ -1,10 +1,10 @@
 import type { Deps } from '../core/deps';
-import { TmdbMediaProvider } from '../core/tmdbClient';
-import { type AppConfig, CACHE_TTL_SECONDS, type LookupMetadata } from '../core/types';
-import type { LookupCacheEntry, LookupCacheOrigin, LookupCachePort } from '../ports/lookupCache';
+import { type AppConfig, CACHE_TTL_SECONDS } from '../core/types';
 import type { MetricsEvent, MetricsPort } from '../ports/metrics';
 import type { RateLimiterPort, RateLimitScope } from '../ports/rateLimiter';
 import type { StoragePort, StoragePutOptions } from '../ports/storage';
+import { TmdbHttpClient } from '../providers/tmdb/client';
+import { TmdbMediaProvider } from '../providers/tmdb/provider';
 
 interface CloudflareRateLimitBinding {
   limit(params: { key: string }): Promise<{ success: boolean }>;
@@ -26,14 +26,15 @@ export function createCloudflareDeps(env: CloudflareEnv): Deps {
 
   return {
     config,
-    lookupCache: new CloudflareKvLookupCache(env.DAILY_KV),
     storage: new CloudflareKvStorage(env.DAILY_KV),
     metrics: new ConsoleMetricsPort(),
     rateLimiter: new CloudflareRateLimiterPort({
       public: env.PUBLIC_RATE_LIMITER,
       api: env.API_RATE_LIMITER,
     }),
-    provider: new TmdbMediaProvider(config.tmdbToken, (input, init) => fetch(input, init)),
+    provider: new TmdbMediaProvider(
+      new TmdbHttpClient(config.tmdbToken, (input, init) => fetch(input, init)),
+    ),
     now: () => new Date(),
   };
 }
@@ -68,71 +69,6 @@ class CloudflareKvStorage implements StoragePort {
       ...(options.ttlSeconds ? { expirationTtl: options.ttlSeconds } : {}),
     });
   }
-}
-
-class CloudflareKvLookupCache implements LookupCachePort {
-  constructor(private readonly kv: KVNamespace) {}
-
-  async get(key: string): Promise<LookupCacheEntry | null> {
-    const value = await this.kv.get(key);
-
-    if (!value) {
-      return null;
-    }
-
-    const parsed = JSON.parse(value) as unknown;
-    return lookupCacheEntry(parsed);
-  }
-
-  put(key: string, entry: LookupCacheEntry, ttlSeconds: number): Promise<void> {
-    return this.kv.put(key, JSON.stringify(entry), {
-      expirationTtl: ttlSeconds,
-    });
-  }
-}
-
-function lookupCacheEntry(value: unknown): LookupCacheEntry | null {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-
-  const candidate = value as Partial<LookupCacheEntry>;
-
-  if (candidate.status === 'not_found') {
-    return { status: 'not_found' };
-  }
-
-  if (candidate.status === 'found' && isLookupMetadata(candidate.metadata)) {
-    const origin = (value as { origin?: unknown }).origin;
-
-    return {
-      status: 'found',
-      metadata: candidate.metadata,
-      ...(isLookupCacheOrigin(origin) ? { origin } : {}),
-    };
-  }
-
-  return null;
-}
-
-function isLookupCacheOrigin(value: unknown): value is LookupCacheOrigin {
-  return value === 'lookup' || value === 'warmup';
-}
-
-function isLookupMetadata(value: unknown): value is LookupMetadata {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const candidate = value as Partial<LookupMetadata>;
-  return (
-    (candidate.type === 'movie' || candidate.type === 'tv') &&
-    candidate.provider === 'tmdb' &&
-    typeof candidate.remoteId === 'string' &&
-    typeof candidate.title === 'string' &&
-    typeof candidate.overview === 'string' &&
-    (candidate.match === 'year' || candidate.match === 'title' || candidate.match === 'uncertain')
-  );
 }
 
 class ConsoleMetricsPort implements MetricsPort {

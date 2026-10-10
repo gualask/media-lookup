@@ -1,12 +1,11 @@
 import { errorResponse, methodNotAllowed } from './responses';
-import type { AppConfig, LookupParams, OverviewTranslationParams } from './types';
+import type { AppConfig, LookupParams } from './types';
 
 export type ParsedRoute =
   | { kind: 'page' }
   | { kind: 'favicon' }
   | ({ kind: 'lookup' } & LookupParams)
   | { kind: 'lookup_batch' }
-  | ({ kind: 'translate' } & OverviewTranslationParams)
   | { kind: 'daily'; language: string };
 
 export type RouteParseResult =
@@ -20,7 +19,6 @@ export type RouteParseResult =
     };
 
 const LOOKUP_PARAMS = new Set(['type', 'title', 'year', 'language']);
-const TRANSLATE_PARAMS = new Set(['type', 'id', 'language']);
 const DAILY_PARAMS = new Set(['language']);
 
 export function parseRoute(request: Request, config: AppConfig): RouteParseResult {
@@ -74,10 +72,6 @@ export function parseRoute(request: Request, config: AppConfig): RouteParseResul
     return { ok: true, route: { kind: 'daily', language: language.value } };
   }
 
-  if (url.pathname === '/translate') {
-    return parseTranslateRoute(url.searchParams, config);
-  }
-
   return {
     ok: false,
     response: errorResponse(404, 'not_found', 'Route not found'),
@@ -122,42 +116,6 @@ function parseLookupRoute(searchParams: URLSearchParams, config: AppConfig): Rou
       type,
       title,
       year: year.value,
-      language: language.value,
-    },
-  };
-}
-
-function parseTranslateRoute(searchParams: URLSearchParams, config: AppConfig): RouteParseResult {
-  const unexpected = findUnexpectedParam(searchParams, TRANSLATE_PARAMS);
-
-  if (unexpected) {
-    return badRequest(`Unexpected query parameter: ${unexpected}`);
-  }
-
-  const type = searchParams.get('type');
-
-  if (type !== 'movie' && type !== 'tv') {
-    return badRequest('Query parameter "type" must be "movie" or "tv"');
-  }
-
-  const remoteId = searchParams.get('id')?.trim();
-
-  if (!remoteId || !/^\d+$/.test(remoteId)) {
-    return badRequest('Query parameter "id" must be a TMDB numeric id');
-  }
-
-  const language = parseLanguage(searchParams, config);
-
-  if (!language.ok) {
-    return language;
-  }
-
-  return {
-    ok: true,
-    route: {
-      kind: 'translate',
-      type,
-      remoteId,
       language: language.value,
     },
   };

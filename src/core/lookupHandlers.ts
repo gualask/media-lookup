@@ -1,8 +1,8 @@
-import type { LookupCacheEntry, LookupCacheOrigin } from '../ports/lookupCache';
 import { lookupCacheKey } from './cacheKeys';
 import type { Deps } from './deps';
 import { UpstreamProviderError } from './errors';
 import { parseLookupBatchRequest } from './lookupBatch';
+import { type LookupCacheOrigin, readLookupCache, writeLookupCache } from './lookupCache';
 import { cacheHeaders, errorResponse, jsonResponse } from './responses';
 import type { ParsedRoute } from './routes';
 import type { LookupMetadata, LookupParams } from './types';
@@ -18,48 +18,29 @@ type LookupResolution =
       metadata: LookupMetadata;
       cache: 'hit' | 'miss';
       origin?: LookupCacheOrigin;
-      tmdbCalls: number;
     }
   | {
       status: 'not_found';
       cache: 'hit' | 'miss';
-      tmdbCalls: number;
     };
 
 // Only batch items can fail on their own; a single lookup still answers 502.
-type BatchItemResolution =
-  | LookupResolution
-  | {
-      status: 'error';
-      cache: 'miss';
-      tmdbCalls: number;
-      message: string;
-    };
+type BatchItemResolution = LookupResolution | { status: 'error'; cache: 'miss'; message: string };
 
 type LookupBatchResult =
-  | {
-      index: number;
-      status: 'found';
-      metadata: LookupMetadata;
-    }
-  | {
-      index: number;
-      status: 'not_found';
-    }
-  | {
-      index: number;
-      status: 'error';
-      error: { message: string };
-    };
+  | { index: number; status: 'found'; metadata: LookupMetadata }
+  | { index: number; status: 'not_found' }
+  | { index: number; status: 'error'; error: { message: string } };
 
 export async function handleLookup(deps: Deps, route: LookupRoute): Promise<Response> {
+  const requestsBefore = deps.provider.requestCount;
   const resolution = await resolveLookup(deps, route);
 
   await deps.metrics.record({
     route: 'lookup',
     cache: resolution.cache,
     provider: 'tmdb',
-    tmdbCalls: resolution.tmdbCalls,
+    tmdbCalls: deps.provider.requestCount - requestsBefore,
     status: resolution.status === 'found' ? 'ok' : 'not_found',
     mediaType: route.type,
     language: route.language,
@@ -84,37 +65,17 @@ export async function handleLookupBatch(request: Request, deps: Deps): Promise<R
     return parsed.response;
   }
 
+  const requestsBefore = deps.provider.requestCount;
   const resolutions = await mapWithConcurrency(parsed.items, LOOKUP_BATCH_CONCURRENCY, (item) =>
     resolveBatchItem(deps, item),
   );
-  const results = resolutions.map((resolution, index): LookupBatchResult => {
-    if (resolution.status === 'found') {
-      return {
-        index,
-        status: 'found',
-        metadata: resolution.metadata,
-      };
-    }
-
-    if (resolution.status === 'error') {
-      return {
-        index,
-        status: 'error',
-        error: { message: resolution.message },
-      };
-    }
-
-    return {
-      index,
-      status: 'not_found',
-    };
-  });
+  const results = resolutions.map((resolution, index) => batchResult(resolution, index));
 
   await deps.metrics.record({
     route: 'lookup_batch',
     cache: resolutions.some((resolution) => resolution.cache === 'miss') ? 'miss' : 'hit',
     provider: 'tmdb',
-    tmdbCalls: resolutions.reduce((sum, resolution) => sum + resolution.tmdbCalls, 0),
+    tmdbCalls: deps.provider.requestCount - requestsBefore,
     status: batchStatus(results),
     mediaType: commonValue(parsed.items.map((item) => item.type)) ?? 'none',
     language: commonValue(parsed.items.map((item) => item.language)) ?? 'mixed',
@@ -122,6 +83,17 @@ export async function handleLookupBatch(request: Request, deps: Deps): Promise<R
   });
 
   return jsonResponse({ results }, { status: 200 });
+}
+
+function batchResult(resolution: BatchItemResolution, index: number): LookupBatchResult {
+  switch (resolution.status) {
+    case 'found':
+      return { index, status: 'found', metadata: resolution.metadata };
+    case 'error':
+      return { index, status: 'error', error: { message: resolution.message } };
+    case 'not_found':
+      return { index, status: 'not_found' };
+  }
 }
 
 // One TMDB failure (a 429 that persists, a 5xx) fails only its own item: the client keeps the
@@ -138,7 +110,6 @@ async function resolveBatchItem(deps: Deps, params: LookupParams): Promise<Batch
     return {
       status: 'error',
       cache: 'miss',
-      tmdbCalls: 1,
       message: error.status ? `${error.message} (${error.status})` : error.message,
     };
   }
@@ -154,77 +125,43 @@ function batchStatus(results: readonly LookupBatchResult[]): 'ok' | 'not_found' 
 
 async function resolveLookup(deps: Deps, params: LookupParams): Promise<LookupResolution> {
   const cacheKey = lookupCacheKey(params);
-  const cached = await safeLookupCacheGet(deps, cacheKey);
+  const cached = await readLookupCache(deps.storage, cacheKey);
 
-  if (cached) {
-    return cached.status === 'found'
-      ? {
-          status: 'found',
-          metadata: cached.metadata,
-          cache: 'hit',
-          origin: cached.origin,
-          tmdbCalls: 0,
-        }
-      : {
-          status: 'not_found',
-          cache: 'hit',
-          tmdbCalls: 0,
-        };
+  if (cached?.status === 'found') {
+    return { status: 'found', metadata: cached.metadata, cache: 'hit', origin: cached.origin };
+  }
+
+  if (cached?.status === 'not_found') {
+    return { status: 'not_found', cache: 'hit' };
   }
 
   const metadata = await deps.provider.lookup(params);
 
   if (metadata) {
-    await safeLookupCachePut(
-      deps,
+    await writeLookupCache(
+      deps.storage,
       cacheKey,
       { status: 'found', metadata, origin: 'lookup' },
       deps.config.cacheTtlSeconds,
     );
 
-    return {
-      status: 'found',
-      metadata,
-      cache: 'miss',
-      tmdbCalls: 1,
-    };
+    return { status: 'found', metadata, cache: 'miss' };
   }
 
-  await safeLookupCachePut(deps, cacheKey, { status: 'not_found' }, LOOKUP_NOT_FOUND_TTL_SECONDS);
+  await writeLookupCache(
+    deps.storage,
+    cacheKey,
+    { status: 'not_found' },
+    LOOKUP_NOT_FOUND_TTL_SECONDS,
+  );
 
-  return {
-    status: 'not_found',
-    cache: 'miss',
-    tmdbCalls: 1,
-  };
-}
-
-async function safeLookupCacheGet(deps: Deps, key: string) {
-  try {
-    return await deps.lookupCache.get(key);
-  } catch (error) {
-    console.warn('Lookup cache get failed', error);
-    return null;
-  }
-}
-
-async function safeLookupCachePut(
-  deps: Deps,
-  key: string,
-  entry: LookupCacheEntry,
-  ttlSeconds: number,
-): Promise<void> {
-  try {
-    await deps.lookupCache.put(key, entry, ttlSeconds);
-  } catch (error) {
-    console.warn('Lookup cache put failed', error);
-  }
+  return { status: 'not_found', cache: 'miss' };
 }
 
 async function mapWithConcurrency<T, U>(
   items: readonly T[],
   concurrency: number,
-  mapper: (item: T, index: number) => Promise<U>,
+  mapper: (item: T) => Promise<U>,
 ): Promise<U[]> {
   const results = new Array<U>(items.length);
   let nextIndex = 0;
@@ -235,11 +172,9 @@ async function mapWithConcurrency<T, U>(
       nextIndex += 1;
       const item = items[index];
 
-      if (item === undefined) {
-        continue;
+      if (item !== undefined) {
+        results[index] = await mapper(item);
       }
-
-      results[index] = await mapper(item, index);
     }
   }
 

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { lookupCacheKey, overviewFallbackCacheKey } from '../../src/core/cacheKeys';
 import { dailySnapshotKey } from '../../src/core/dailySnapshot';
 import { handleRequest } from '../../src/core/handleRequest';
 import {
   createTestDeps,
   FakeMediaProvider,
-  MemoryLookupCachePort,
   MemoryMetricsPort,
   MemoryRateLimiterPort,
   MemoryStoragePort,
+  storedLookup,
+  storeLookup,
   testConfig,
 } from './helpers';
 
@@ -50,7 +50,7 @@ describe('handleRequest', () => {
     expect(await response.text()).toContain('<svg');
   });
 
-  it('renders a missing overview notice without calling the protected fallback', async () => {
+  it('renders a missing overview notice', async () => {
     const provider = new FakeMediaProvider();
     provider.lookupResult = {
       type: 'movie',
@@ -71,13 +71,12 @@ describe('handleRequest', () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain('Trama italiana non disponibile.');
-    expect(html).not.toContain('/translate');
   });
 
   it('returns lookup metadata and caches the response', async () => {
     const provider = new FakeMediaProvider();
-    const lookupCache = new MemoryLookupCachePort();
-    const deps = createTestDeps({ lookupCache, provider });
+    const storage = new MemoryStoragePort();
+    const deps = createTestDeps({ storage, provider });
     const url = 'https://example.com/lookup?type=movie&title=Dune&year=2024&language=it-IT';
 
     const first = await handleRequest(new Request(url), deps);
@@ -87,16 +86,10 @@ describe('handleRequest', () => {
     expect(second.status).toBe(200);
     expect(first.headers.get('Cache-Control')).toBe('private, max-age=2592000');
     expect(provider.lookupCalls).toBe(1);
-    expect(
-      lookupCache.entries.has(
-        lookupCacheKey({
-          type: 'movie',
-          title: 'Dune',
-          year: 2024,
-          language: 'it-IT',
-        }),
-      ),
-    ).toBe(true);
+    expect(storedLookup(storage, { type: 'movie', title: 'Dune', year: 2024 })).toMatchObject({
+      status: 'found',
+      origin: 'lookup',
+    });
     await expect(first.json()).resolves.toMatchObject({
       provider: 'tmdb',
       remoteId: '693134',
@@ -108,8 +101,8 @@ describe('handleRequest', () => {
   it('returns lookup batch results and caches found and not found entries', async () => {
     const provider = new FakeMediaProvider();
     provider.lookupResults.set('Missing', null);
-    const lookupCache = new MemoryLookupCachePort();
-    const deps = createTestDeps({ lookupCache, provider });
+    const storage = new MemoryStoragePort();
+    const deps = createTestDeps({ storage, provider });
     const request = () =>
       new Request('https://example.com/lookup/batch', {
         method: 'POST',
@@ -146,37 +139,31 @@ describe('handleRequest', () => {
         },
       ],
     });
-    expect(
-      lookupCache.entries.get(
-        lookupCacheKey({
-          type: 'movie',
-          title: 'Missing',
-          language: 'it-IT',
-        }),
-      ),
-    ).toEqual({ status: 'not_found' });
+    expect(storedLookup(storage, { type: 'movie', title: 'Missing' })).toEqual({
+      status: 'not_found',
+    });
   });
 
   it('records cache and warmup hits per lookup batch', async () => {
     const provider = new FakeMediaProvider();
     const metrics = new MemoryMetricsPort();
-    const lookupCache = new MemoryLookupCachePort();
+    const storage = new MemoryStoragePort();
     const metadata = provider.lookupResult;
 
     if (!metadata) {
       throw new Error('Expected default lookup result');
     }
 
-    lookupCache.entries.set(lookupCacheKey({ type: 'movie', title: 'Warm', language: 'it-IT' }), {
-      status: 'found',
-      metadata,
-      origin: 'warmup',
-    });
-    lookupCache.entries.set(lookupCacheKey({ type: 'movie', title: 'Seen', language: 'it-IT' }), {
-      status: 'found',
-      metadata,
-      origin: 'lookup',
-    });
+    await storeLookup(
+      storage,
+      { type: 'movie', title: 'Warm' },
+      { status: 'found', metadata, origin: 'warmup' },
+    );
+    await storeLookup(
+      storage,
+      { type: 'movie', title: 'Seen' },
+      { status: 'found', metadata, origin: 'lookup' },
+    );
 
     await handleRequest(
       new Request('https://example.com/lookup/batch', {
@@ -190,7 +177,7 @@ describe('handleRequest', () => {
           ],
         }),
       }),
-      createTestDeps({ lookupCache, metrics, provider }),
+      createTestDeps({ storage, metrics, provider }),
     );
 
     expect(provider.lookupCalls).toBe(1);
@@ -203,16 +190,17 @@ describe('handleRequest', () => {
         warmupHits: 1,
       }),
     ]);
-    expect(
-      lookupCache.entries.get(lookupCacheKey({ type: 'movie', title: 'New', language: 'it-IT' })),
-    ).toMatchObject({ status: 'found', origin: 'lookup' });
+    expect(storedLookup(storage, { type: 'movie', title: 'New' })).toMatchObject({
+      status: 'found',
+      origin: 'lookup',
+    });
   });
 
   it('fails only the batch item whose TMDB request failed', async () => {
     const provider = new FakeMediaProvider();
     provider.failingTitles.add('Busy');
     const metrics = new MemoryMetricsPort();
-    const lookupCache = new MemoryLookupCachePort();
+    const storage = new MemoryStoragePort();
 
     const response = await handleRequest(
       new Request('https://example.com/lookup/batch', {
@@ -225,7 +213,7 @@ describe('handleRequest', () => {
           ],
         }),
       }),
-      createTestDeps({ lookupCache, metrics, provider }),
+      createTestDeps({ storage, metrics, provider }),
     );
 
     expect(response.status).toBe(200);
@@ -235,11 +223,15 @@ describe('handleRequest', () => {
         { index: 1, status: 'error', error: { message: 'TMDB API request failed (429)' } },
       ],
     });
-    expect(
-      lookupCache.entries.has(lookupCacheKey({ type: 'movie', title: 'Busy', language: 'it-IT' })),
-    ).toBe(false);
+    expect(storedLookup(storage, { type: 'movie', title: 'Busy' })).toBeUndefined();
     expect(metrics.events).toEqual([
-      expect.objectContaining({ route: 'lookup_batch', status: 'ok', items: 2, errors: 1 }),
+      expect.objectContaining({
+        route: 'lookup_batch',
+        status: 'ok',
+        tmdbCalls: 2,
+        items: 2,
+        errors: 1,
+      }),
     ]);
   });
 
@@ -266,6 +258,29 @@ describe('handleRequest', () => {
     expect(rejected.status).toBe(400);
     await expect(rejected.json()).resolves.toMatchObject({
       error: { code: 'batch_too_large' },
+    });
+  });
+
+  it('validates the batch language like the lookup query parameter', async () => {
+    const provider = new FakeMediaProvider();
+    const deps = createTestDeps({ provider });
+    const batch = (language: unknown) =>
+      handleRequest(
+        new Request('https://example.com/lookup/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: [{ type: 'movie', title: 'Dune', language }] }),
+        }),
+        deps,
+      );
+
+    const blank = await batch('  ');
+    const notString = await batch(42);
+
+    expect(blank.status).toBe(200);
+    expect(notString.status).toBe(400);
+    await expect(notString.json()).resolves.toMatchObject({
+      error: { message: 'Lookup batch item 0: field "language" must be a string' },
     });
   });
 
@@ -386,80 +401,6 @@ describe('handleRequest', () => {
     });
   });
 
-  it('returns an english overview fallback from TMDB and caches it', async () => {
-    const provider = new FakeMediaProvider();
-    const storage = new MemoryStoragePort();
-    const deps = createTestDeps({ provider, storage });
-    const url = 'https://example.com/translate?type=movie&id=693134&language=en-US';
-
-    const first = await handleRequest(new Request(url), deps);
-    const second = await handleRequest(new Request(url), deps);
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(provider.translationCalls).toBe(1);
-    await expect(first.json()).resolves.toEqual({
-      overview: 'English overview recovered from TMDB',
-      language: 'en-US',
-    });
-    await expect(
-      storage.getText(
-        overviewFallbackCacheKey({
-          type: 'movie',
-          remoteId: '693134',
-          language: 'en-US',
-        }),
-      ),
-    ).resolves.toContain('"status":"found"');
-  });
-
-  it('renders cached english overview fallback after the home is refreshed', async () => {
-    const provider = new FakeMediaProvider();
-    provider.lookupResult = {
-      type: 'movie',
-      provider: 'tmdb',
-      remoteId: '693134',
-      title: 'Dune - Parte due',
-      year: 2024,
-      overview: '',
-      posterPath: '/abc123.jpg',
-      match: 'year',
-    };
-    const deps = createTestDeps({ provider });
-
-    const firstHome = await handleRequest(new Request('https://example.com/'), deps);
-    const firstHtml = await firstHome.text();
-
-    expect(firstHtml).toContain('Trama italiana non disponibile.');
-
-    const fallback = await handleRequest(
-      new Request('https://example.com/translate?type=movie&id=693134&language=en-US'),
-      deps,
-    );
-    const refreshedHome = await handleRequest(new Request('https://example.com/'), deps);
-    const refreshedHtml = await refreshedHome.text();
-
-    expect(fallback.status).toBe(200);
-    expect(provider.snapshotCalls).toBe(1);
-    expect(provider.translationCalls).toBe(1);
-    expect(refreshedHtml).toContain('English overview recovered from TMDB');
-    expect(refreshedHtml).not.toContain('Trama italiana non disponibile.');
-  });
-
-  it('returns 404 when english overview fallback is not found', async () => {
-    const provider = new FakeMediaProvider();
-    provider.translationResult = null;
-    const response = await handleRequest(
-      new Request('https://example.com/translate?type=movie&id=693134&language=en-US'),
-      createTestDeps({ provider }),
-    );
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'not_found' },
-    });
-  });
-
   it('returns 404 when the daily snapshot is missing', async () => {
     const response = await handleRequest(
       new Request('https://example.com/daily?language=it-IT'),
@@ -533,15 +474,69 @@ describe('handleRequest', () => {
 
   it('serves the rebuilt snapshot when storing it fails', async () => {
     const storage = new MemoryStoragePort();
-    storage.putText = () => Promise.reject(new Error('KV put() limit exceeded for the day.'));
-    const lookupCache = new MemoryLookupCachePort();
-    const deps = createTestDeps({ lookupCache, storage });
+    let writes = 0;
+    storage.putText = () => {
+      writes += 1;
+      return Promise.reject(new Error('KV put() limit exceeded for the day.'));
+    };
 
-    const response = await handleRequest(new Request('https://example.com/'), deps);
+    const response = await handleRequest(
+      new Request('https://example.com/'),
+      createTestDeps({ storage }),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Dune - Parte due');
-    expect(lookupCache.entries.size).toBe(0);
+    // Only the snapshot write was tried: the warmup would fail the same way.
+    expect(writes).toBe(1);
+  });
+
+  it('serves the previous snapshot when the daily refresh fails', async () => {
+    const storage = new MemoryStoragePort();
+    const provider = new FakeMediaProvider();
+    const metrics = new MemoryMetricsPort();
+    provider.discoverFails = true;
+    await storage.putText(
+      dailySnapshotKey('it-IT'),
+      JSON.stringify({
+        generatedAt: '2026-06-02T08:00:00.000Z',
+        language: 'it-IT',
+        items: [
+          {
+            type: 'movie',
+            provider: 'tmdb',
+            remoteId: '1',
+            title: 'Ieri al cinema',
+            year: 2026,
+            overview: '',
+            source: 'movie_theatrical_recent',
+          },
+        ],
+      }),
+    );
+
+    const response = await handleRequest(
+      new Request('https://example.com/'),
+      createTestDeps({ metrics, provider, storage }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('Ieri al cinema');
+    expect(metrics.events).toContainEqual(
+      expect.objectContaining({ route: 'daily_refresh', status: 'error' }),
+    );
+  });
+
+  it('answers 502 when the first daily refresh fails', async () => {
+    const provider = new FakeMediaProvider();
+    provider.discoverFails = true;
+
+    const response = await handleRequest(
+      new Request('https://example.com/'),
+      createTestDeps({ provider }),
+    );
+
+    expect(response.status).toBe(502);
   });
 
   it('warms lookup cache with the same keys used by client lookup requests', async () => {
