@@ -76,22 +76,11 @@ export function methodNotAllowed(allowedMethods: readonly string[]): Response {
   });
 }
 
-export function responseWithHeaders(response: Response, headersInit: HeadersInit): Response {
-  const headers = new Headers(response.headers);
-
-  for (const [key, value] of new Headers(headersInit)) {
-    headers.set(key, value);
-  }
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
-export function cacheHeaders(ttlSeconds: number): HeadersInit {
+export function cacheHeaders(
+  ttlSeconds: number,
+  visibility: 'public' | 'private' = 'public',
+): HeadersInit {
   return {
-    'Cache-Control': `public, max-age=${ttlSeconds}`,
+    'Cache-Control': `${visibility}, max-age=${ttlSeconds}`,
   };
 }

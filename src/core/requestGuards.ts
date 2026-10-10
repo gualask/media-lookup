@@ -39,7 +39,7 @@ export function enforceAuthorization(
     return null;
   }
 
-  if (bearerToken(request) === deps.config.apiBearerToken) {
+  if (constantTimeEqual(bearerToken(request) ?? '', deps.config.apiBearerToken)) {
     return null;
   }
 
@@ -53,6 +53,21 @@ function bearerToken(request: Request): string | null {
   const match = /^Bearer\s+(.+)$/i.exec(authorization ?? '');
 
   return match?.[1]?.trim() || null;
+}
+
+// Compares every byte so the response time does not reveal how much of the token matched.
+function constantTimeEqual(left: string, right: string): boolean {
+  const encoder = new TextEncoder();
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let difference = leftBytes.length ^ rightBytes.length;
+
+  for (let index = 0; index < length; index += 1) {
+    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+
+  return difference === 0;
 }
 
 function rateLimitKey(request: Request, routeKind: RouteKind): string {

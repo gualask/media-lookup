@@ -34,7 +34,7 @@ export async function handleTranslate(deps: Deps, route: TranslateRoute): Promis
           language: cached.language,
         },
         { status: 200 },
-        cacheHeaders(deps.config.cacheTtlSeconds),
+        cacheHeaders(deps.config.cacheTtlSeconds, 'private'),
       );
     }
 
@@ -71,7 +71,11 @@ export async function handleTranslate(deps: Deps, route: TranslateRoute): Promis
     deps.config.cacheTtlSeconds,
   );
 
-  return jsonResponse(translation, { status: 200 }, cacheHeaders(deps.config.cacheTtlSeconds));
+  return jsonResponse(
+    translation,
+    { status: 200 },
+    cacheHeaders(deps.config.cacheTtlSeconds, 'private'),
+  );
 }
 
 export async function hydrateSnapshotOverviewFallbacks(

@@ -52,7 +52,7 @@ export async function handleLookup(deps: Deps, route: LookupRoute): Promise<Resp
     return jsonResponse(
       resolution.metadata,
       { status: 200 },
-      cacheHeaders(deps.config.cacheTtlSeconds),
+      cacheHeaders(deps.config.cacheTtlSeconds, 'private'),
     );
   }
 

@@ -18,13 +18,13 @@ export async function readDailySnapshot(
     return null;
   }
 
-  const parsed = JSON.parse(value) as unknown;
-
-  if (!isDailySnapshot(parsed)) {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isDailySnapshot(parsed) ? parsed : null;
+  } catch (error) {
+    console.warn('Daily snapshot parse failed', error);
     return null;
   }
-
-  return parsed;
 }
 
 export interface EnsureDailySnapshotResult {

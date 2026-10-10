@@ -7,7 +7,7 @@
   "preview_urls": true,
   "vars": {
     "DEFAULT_LANGUAGE": "it-IT",
-    "SUPPORTED_LANGUAGES": "it-IT,en-US",
+    "SUPPORTED_LANGUAGES": "it-IT,en-US,es-ES,fr-FR,de-DE",
     "DAILY_REFRESH_TIME_ZONE": "Europe/Rome"
   },
   "kv_namespaces": [

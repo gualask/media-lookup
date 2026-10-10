@@ -45,7 +45,7 @@ describe('handleRequest', () => {
     expect(await response.text()).toContain('<svg');
   });
 
-  it('renders a lazy overview recovery button when the overview is missing', async () => {
+  it('renders a missing overview notice without client fallback controls', async () => {
     const provider = new FakeMediaProvider();
     provider.lookupResult = {
       type: 'movie',
@@ -64,11 +64,9 @@ describe('handleRequest', () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain('data-overview-button');
-    expect(html).toContain('data-type="movie"');
-    expect(html).toContain('data-id="693134"');
-    expect(html).toContain('data-language="en-US"');
-    expect(html).toContain('Recupera trama EN');
+    expect(html).toContain('Trama italiana non disponibile.');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('/translate');
   });
 
   it('returns lookup metadata and caches the response', async () => {
@@ -82,6 +80,7 @@ describe('handleRequest', () => {
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
+    expect(first.headers.get('Cache-Control')).toBe('private, max-age=2592000');
     expect(provider.lookupCalls).toBe(1);
     expect(
       lookupCache.entries.has(
@@ -152,6 +151,50 @@ describe('handleRequest', () => {
     ).toEqual({ status: 'not_found' });
   });
 
+  it('accepts lookup batches up to 15 items and rejects larger ones', async () => {
+    const provider = new FakeMediaProvider();
+    const deps = createTestDeps({ provider });
+    const batchRequest = (count: number) =>
+      new Request('https://example.com/lookup/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: Array.from({ length: count }, (_, index) => ({
+            type: 'movie',
+            title: `Title ${index}`,
+          })),
+        }),
+      });
+
+    const accepted = await handleRequest(batchRequest(15), deps);
+    const rejected = await handleRequest(batchRequest(16), deps);
+
+    expect(accepted.status).toBe(200);
+    expect(provider.lookupCalls).toBe(15);
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({
+      error: { code: 'batch_too_large' },
+    });
+  });
+
+  it('rejects lookup batch items with unsupported languages', async () => {
+    const response = await handleRequest(
+      new Request('https://example.com/lookup/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{ type: 'movie', title: 'Dune', language: 'ja-JP' }],
+        }),
+      }),
+      createTestDeps(),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'unsupported_language' },
+    });
+  });
+
   it('requires bearer authorization for API routes when configured', async () => {
     const provider = new FakeMediaProvider();
     const deps = createTestDeps({
@@ -173,8 +216,27 @@ describe('handleRequest', () => {
       deps,
     );
 
+    const wrongToken = await handleRequest(
+      new Request(url, {
+        headers: {
+          Authorization: 'Bearer api-secreT',
+        },
+      }),
+      deps,
+    );
+    const longerToken = await handleRequest(
+      new Request(url, {
+        headers: {
+          Authorization: 'Bearer api-secret-extra',
+        },
+      }),
+      deps,
+    );
+
     expect(unauthorized.status).toBe(401);
     expect(unauthorized.headers.get('WWW-Authenticate')).toBe('Bearer');
+    expect(wrongToken.status).toBe(401);
+    expect(longerToken.status).toBe(401);
     expect(authorized.status).toBe(200);
     expect(provider.lookupCalls).toBe(1);
   });
@@ -275,7 +337,7 @@ describe('handleRequest', () => {
     const firstHome = await handleRequest(new Request('https://example.com/'), deps);
     const firstHtml = await firstHome.text();
 
-    expect(firstHtml).toContain('Recupera trama EN');
+    expect(firstHtml).toContain('Trama italiana non disponibile.');
 
     const fallback = await handleRequest(
       new Request('https://example.com/translate?type=movie&id=693134&language=en-US'),
@@ -288,7 +350,7 @@ describe('handleRequest', () => {
     expect(provider.snapshotCalls).toBe(1);
     expect(provider.translationCalls).toBe(1);
     expect(refreshedHtml).toContain('English overview recovered from TMDB');
-    expect(refreshedHtml).not.toContain('Recupera trama EN');
+    expect(refreshedHtml).not.toContain('Trama italiana non disponibile.');
   });
 
   it('returns 404 when english overview fallback is not found', async () => {
@@ -360,6 +422,20 @@ describe('handleRequest', () => {
     await handleRequest(new Request('https://example.com/'), deps);
 
     expect(provider.snapshotCalls).toBe(2);
+  });
+
+  it('rebuilds the daily snapshot when the stored one is corrupted', async () => {
+    const storage = new MemoryStoragePort();
+    const provider = new FakeMediaProvider();
+    await storage.putText(dailySnapshotKey('it-IT'), '{not json');
+
+    const response = await handleRequest(
+      new Request('https://example.com/'),
+      createTestDeps({ provider, storage }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(provider.snapshotCalls).toBe(1);
   });
 
   it('warms lookup cache with the same keys used by client lookup requests', async () => {

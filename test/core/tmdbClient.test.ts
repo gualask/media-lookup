@@ -218,6 +218,32 @@ describe('TmdbMediaProvider daily snapshot', () => {
   });
 });
 
+describe('TmdbMediaProvider lookup', () => {
+  it('searches tv by any air date year, not only the first air date', async () => {
+    const requestedUrls: URL[] = [];
+    const fetchFn = async (input: RequestInfo | URL) => {
+      requestedUrls.push(new URL(input.toString()));
+
+      return jsonResponse({
+        results: [{ id: 1396, name: 'Breaking Bad', first_air_date: '2008-01-20' }],
+      });
+    };
+    const provider = new TmdbMediaProvider('token', fetchFn as typeof fetch);
+
+    const metadata = await provider.lookup({
+      type: 'tv',
+      title: 'Breaking Bad',
+      year: 2012,
+      language: 'it-IT',
+    });
+
+    expect(requestedUrls[0]?.pathname).toBe('/3/search/tv');
+    expect(requestedUrls[0]?.searchParams.get('year')).toBe('2012');
+    expect(requestedUrls[0]?.searchParams.has('first_air_date_year')).toBe(false);
+    expect(metadata).toMatchObject({ remoteId: '1396', year: 2008 });
+  });
+});
+
 describe('TmdbMediaProvider overview fallback', () => {
   it('fetches a non empty overview for the requested language', async () => {
     const fetchFn = async (input: RequestInfo | URL) => {

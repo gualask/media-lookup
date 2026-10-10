@@ -72,7 +72,7 @@ export class TmdbMediaProvider {
       language: params.language,
       include_adult: 'false',
       page: '1',
-      ...(params.year ? { first_air_date_year: params.year.toString() } : {}),
+      ...(params.year ? { year: params.year.toString() } : {}),
     });
 
     const result = pickBestResult(response.results ?? [], params.year, 'tv');

@@ -1,7 +1,7 @@
 import { errorResponse } from './responses';
 import type { AppConfig, LookupParams } from './types';
 
-const LOOKUP_BATCH_MAX_ITEMS = 10;
+const LOOKUP_BATCH_MAX_ITEMS = 15;
 
 export async function parseLookupBatchRequest(
   request: Request,

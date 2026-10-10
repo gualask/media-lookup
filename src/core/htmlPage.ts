@@ -180,26 +180,6 @@ export function renderPreviewPage(snapshot: DailySnapshot | null): string {
       color: #aeb7c4;
     }
 
-    .overview-action {
-      border: 1px solid #394454;
-      border-radius: 5px;
-      padding: 5px 8px;
-      background: #1b2230;
-      color: #f4f5f7;
-      cursor: pointer;
-      font: inherit;
-    }
-
-    .overview-action:disabled {
-      cursor: default;
-      opacity: 0.65;
-    }
-
-    .overview-status {
-      display: block;
-      margin-top: 8px;
-    }
-
     footer {
       margin-top: 28px;
     }
@@ -236,102 +216,6 @@ export function renderPreviewPage(snapshot: DailySnapshot | null): string {
     ${sections}
     <footer>${ATTRIBUTION}</footer>
   </main>
-  <script>
-    (() => {
-      const STORAGE_PREFIX = 'mediaLookup.overviewFallback.v1';
-
-      const storageKey = (button) =>
-        [STORAGE_PREFIX, button.dataset.language, button.dataset.type, button.dataset.id].join(':');
-
-      const applyOverview = (target, overview) => {
-        target.classList.remove('overview-empty');
-        target.textContent = overview || 'Trama non disponibile nemmeno in inglese.';
-      };
-
-      const hydrateCachedOverviews = () => {
-        for (const button of document.querySelectorAll('[data-overview-button]')) {
-          try {
-            const cached = localStorage.getItem(storageKey(button));
-
-            if (!cached) {
-              continue;
-            }
-
-            const data = JSON.parse(cached);
-            const target = button.closest('[data-overview-target]');
-
-            if (target && typeof data.overview === 'string') {
-              applyOverview(target, data.overview);
-            }
-          } catch {
-            localStorage.removeItem(storageKey(button));
-          }
-        }
-      };
-
-      document.addEventListener('click', async (event) => {
-        const eventTarget = event.target;
-
-        if (!(eventTarget instanceof Element)) {
-          return;
-        }
-
-        const button = eventTarget.closest('[data-overview-button]');
-
-        if (!button) {
-          return;
-        }
-
-        const target = button.closest('[data-overview-target]');
-        const status = target?.querySelector('[data-overview-status]');
-
-        if (!target || !status) {
-          return;
-        }
-
-        const params = new URLSearchParams({
-          type: button.dataset.type,
-          id: button.dataset.id,
-          language: button.dataset.language,
-        });
-
-        button.disabled = true;
-        button.textContent = 'Recupero...';
-        status.textContent = '';
-
-        try {
-          const response = await fetch('/translate?' + params.toString(), {
-            headers: { Accept: 'application/json' },
-          });
-
-          if (response.status === 404) {
-            button.textContent = 'Non disponibile';
-            status.textContent = 'Trama non disponibile nemmeno in inglese.';
-            return;
-          }
-
-          if (!response.ok) {
-            throw new Error('Request failed');
-          }
-
-          const data = await response.json();
-          applyOverview(target, data.overview);
-
-          try {
-            localStorage.setItem(storageKey(button), JSON.stringify(data));
-          } catch {
-            // Ignore storage failures; KV still keeps the fallback for future renders.
-          }
-        } catch {
-          button.disabled = false;
-          button.textContent = 'Riprova';
-          status.textContent = 'Errore nel recupero.';
-        }
-      });
-
-      hydrateCachedOverviews();
-    })();
-  </script>
 </body>
 </html>`;
 }
@@ -360,7 +244,7 @@ function renderItem(item: DailySnapshotItem, language: string): string {
   const year = item.year ? ` · ${item.year}` : '';
   const overview = item.overview.trim()
     ? `<p class="overview">${escapeHtml(item.overview.trim())}</p>`
-    : renderMissingOverview(item, language);
+    : renderMissingOverview(language);
 
   return `<article>
   ${poster}
@@ -385,11 +269,8 @@ function youtubeTrailerSearchUrl(item: DailySnapshotItem): string {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
 }
 
-function renderMissingOverview(item: DailySnapshotItem, language: string): string {
-  return `<div class="overview overview-empty" data-overview-target>
-      <button class="overview-action" type="button" data-overview-button data-type="${escapeHtml(item.type)}" data-id="${escapeHtml(item.remoteId)}" data-language="en-US">Recupera trama EN</button>
-      <span class="overview-status" data-overview-status>${escapeHtml(missingOverviewStatus(language))}</span>
-    </div>`;
+function renderMissingOverview(language: string): string {
+  return `<p class="overview overview-empty">${escapeHtml(missingOverviewStatus(language))}</p>`;
 }
 
 function missingOverviewStatus(language: string): string {

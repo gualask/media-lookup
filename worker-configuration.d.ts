@@ -6,7 +6,7 @@ interface __BaseEnv_Env {
 	PUBLIC_RATE_LIMITER: RateLimit;
 	API_RATE_LIMITER: RateLimit;
 	DEFAULT_LANGUAGE: "it-IT";
-	SUPPORTED_LANGUAGES: "it-IT,en-US";
+	SUPPORTED_LANGUAGES: "it-IT,en-US,es-ES,fr-FR,de-DE";
 	DAILY_REFRESH_TIME_ZONE: "Europe/Rome";
 	TMDB_TOKEN: string;
 	API_BEARER_TOKEN: string;

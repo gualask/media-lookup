@@ -1,7 +1,7 @@
 # media-lookup
 
 `media-lookup` is a Cloudflare Worker that provides movie and TV metadata for
-the desktop client without exposing the TMDB token to browser clients.
+a private desktop client without distributing the TMDB token to clients.
 
 The public home page is also used as a lazy warmup surface: visiting `/` builds
 the daily media snapshot once per day and writes lookup-compatible cache entries.
@@ -16,7 +16,7 @@ the daily media snapshot once per day and writes lookup-compatible cache entries
   bytes.
 - Lazy English overview fallback through TMDB detail lookup, not machine
   translation.
-- Bearer-protected API routes for the client's server-side integration.
+- Bearer-protected API routes for the desktop client integration.
 - Worker Rate Limit bindings for public and API traffic.
 - Inline SVG favicon served by the Worker.
 - Console-based structured metrics events.
@@ -28,7 +28,7 @@ the daily media snapshot once per day and writes lookup-compatible cache entries
 - `pnpm`.
 - Biome for format/lint.
 - Vitest for core tests.
-- `@cloudflare/vitest-pool-workers` for Worker runtime tests.
+- `@cloudflare/vitest-plugin` for Worker runtime tests.
 - Cloudflare KV through the `DAILY_KV` binding.
 
 ## Production URL
@@ -115,14 +115,12 @@ The rendered page:
 - Uses direct TMDB poster URLs at size `w185`.
 - Links each item to a YouTube search for `<title> <year> trailer italiano`.
 - Shows the full localized overview in a fixed-height scrollable item body.
-- Renders `Recupera trama EN` for empty localized overviews.
+- Shows a short notice for empty localized overviews.
+- Ships no client JavaScript.
 
-The fallback button calls `/translate` from browser JavaScript without a Bearer
-token. In production, where `API_BEARER_TOKEN` is configured, that click cannot
-authorize itself and will fail with `401`. The protected `/translate` endpoint
-is still the intended server-side integration point for the desktop client; if the
-fallback has already been cached by an authorized call, the home page hydrates it
-while rendering.
+The page cannot call the protected `/translate` endpoint itself. If an
+authorized call has already cached an English overview fallback, the home page
+shows it while rendering.
 
 ### Daily Sources
 
@@ -195,6 +193,11 @@ Query parameters:
 Unexpected query parameters return `400`. Unsupported languages return `400`.
 Missing metadata returns `404`.
 
+For `tv`, `year` is sent to TMDB as `year`, which matches the first air date
+and every episode air date. A title parsed from a recent season can still find
+a series that started years earlier. For `movie`, `year` is sent as
+`primary_release_year`.
+
 Response:
 
 ```json
@@ -210,6 +213,9 @@ Response:
 ```
 
 `posterPath` is a TMDB path, not a proxied media URL.
+
+Found responses carry `Cache-Control: private, max-age=2592000`: clients may
+keep them, shared caches must not store authorized responses.
 
 ## Lookup Batch
 
@@ -233,9 +239,11 @@ Request:
 Rules:
 
 - `items` is required and cannot be empty.
-- Maximum batch size is 10 items.
+- Maximum batch size is 15 items. Larger batches return `400 batch_too_large`.
 - Each item uses the same fields as `/lookup`.
 - In JSON, `year` must be a four digit number, not a string.
+- One invalid item, including an unsupported `language`, rejects the whole
+  batch with `400`.
 - Internal provider concurrency is capped at 3.
 - Results are returned item-by-item and keep the original input index.
 
@@ -418,7 +426,7 @@ do not currently emit metrics events.
 
 ## Client Integration
 
-Use lookup first from server-side code:
+Single lookup:
 
 ```text
 <WORKER_URL>/lookup?type=movie|tv&title=<title>&language=<language>&year=<optional>
@@ -430,7 +438,9 @@ For desktop batch hydration, prefer:
 <WORKER_URL>/lookup/batch
 ```
 
-with up to 10 items per request.
+with up to 15 items per request. The desktop client sends batches of 15, and
+its language setting offers the same languages as `SUPPORTED_LANGUAGES`: change
+both sides together.
 
 Protected API routes require:
 
@@ -470,9 +480,12 @@ pnpm exec wrangler secret put TMDB_TOKEN
 pnpm exec wrangler secret put API_BEARER_TOKEN
 ```
 
-`TMDB_TOKEN` is only used server-side by this Worker. `API_BEARER_TOKEN` is
-shared with the client's server-side calls and must never be exposed in browser
-code.
+`TMDB_TOKEN` is only used server-side by this Worker and must never leave it.
+
+`API_BEARER_TOKEN` is shared with the desktop client. Because the client is a desktop
+app, the token ships inside its binary and can be extracted: treat it as a soft
+barrier against casual calls, not as authentication. The real limits on abuse
+are the Worker rate limits and the KV cache in front of TMDB.
 
 If `API_BEARER_TOKEN` is missing, the code intentionally skips API
 authorization. Production should configure it.
@@ -488,7 +501,7 @@ Non-sensitive vars are configured in `wrangler.jsonc`:
 
 ```text
 DEFAULT_LANGUAGE=it-IT
-SUPPORTED_LANGUAGES=it-IT,en-US
+SUPPORTED_LANGUAGES=it-IT,en-US,es-ES,fr-FR,de-DE
 DAILY_REFRESH_TIME_ZONE=Europe/Rome
 workers_dev=true
 preview_urls=true
@@ -517,7 +530,7 @@ This repository is public. Real secret values must exist only in:
 
 - `.dev.vars` for local development.
 - Cloudflare Worker secrets.
-- The desktop client's server-side environment for `API_BEARER_TOKEN`.
+- The desktop client's configuration for `API_BEARER_TOKEN`.
 
 Never commit `.dev.vars`, `.env`, copied tokens, request examples with real
 bearer values, or TMDB tokens. If a token is committed publicly, rotate it

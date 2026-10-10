@@ -43,7 +43,7 @@ function createAppConfig(env: CloudflareEnv): AppConfig {
     tmdbToken: env.TMDB_TOKEN ?? '',
     apiBearerToken: env.API_BEARER_TOKEN ?? '',
     defaultLanguage: env.DEFAULT_LANGUAGE ?? 'it-IT',
-    supportedLanguages: parseCsv(env.SUPPORTED_LANGUAGES ?? 'it-IT,en-US'),
+    supportedLanguages: parseCsv(env.SUPPORTED_LANGUAGES ?? 'it-IT,en-US,es-ES,fr-FR,de-DE'),
     cacheTtlSeconds: CACHE_TTL_SECONDS,
     dailyRefreshTimeZone: env.DAILY_REFRESH_TIME_ZONE ?? 'Europe/Rome',
   };
