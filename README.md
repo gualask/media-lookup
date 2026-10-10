@@ -1,7 +1,7 @@
 # media-lookup
 
 `media-lookup` is a Cloudflare Worker that provides movie and TV metadata for
-a private desktop client without distributing the TMDB token to clients.
+a private desktop client without distributing the TMDB token to it.
 
 The public home page is also used as a lazy warmup surface: visiting `/` builds
 the daily media snapshot once per day and writes lookup-compatible cache entries.
@@ -16,7 +16,7 @@ the daily media snapshot once per day and writes lookup-compatible cache entries
   bytes.
 - Lazy English overview fallback through TMDB detail lookup, not machine
   translation.
-- Bearer-protected API routes for the desktop client integration.
+- Bearer-protected API routes for the desktop client.
 - Worker Rate Limit bindings for public and API traffic.
 - Inline SVG favicon served by the Worker.
 - Console-based structured metrics events.
@@ -355,7 +355,7 @@ Recommended sizes:
 - `w342` or `w500` only for larger views.
 - Avoid `original` by default.
 
-If the desktop client wants local filesystem caching, it should cache the final CDN size
+If the client wants local filesystem caching, it should cache the final CDN size
 it actually displays.
 
 ## Cache
@@ -486,11 +486,9 @@ CLOUDFLARE_API_TOKEN=...
 The token needs Account → Workers Observability → Edit (the telemetry query
 endpoint requires it) and Account → Account Analytics → Read.
 
-Keep this file named `.env.cloudflare`, not `.env`. Wrangler loads `.env` on
-every command: a `CLOUDFLARE_API_TOKEN` there would replace the `wrangler login`
-session for deploys and other commands, and `wrangler dev` can expose `.env`
-values to the Worker's `env`. Wrangler only reads `.env.<name>` when a command
-runs with `--env <name>`, and this project has no `cloudflare` environment.
+Keep this file named `.env.cloudflare`, not `.env`: Wrangler loads `.env` on
+every command, and its token would replace the `wrangler login` session.
+`AGENTS.md` has the details.
 
 ## Client Integration
 
@@ -518,7 +516,7 @@ Authorization: Bearer <API_BEARER_TOKEN>
 
 Use the returned `posterPath` to build a direct TMDB CDN image URL.
 
-If `overview` is empty, expose a user-triggered action in the desktop client and call:
+If `overview` is empty, expose a user-triggered action in the client and call:
 
 ```text
 <WORKER_URL>/translate?type=<movie|tv>&id=<remoteId>&language=en-US
@@ -527,7 +525,7 @@ If `overview` is empty, expose a user-triggered action in the desktop client and
 Do not prefetch English fallbacks for every item. The endpoint is designed for
 explicit clicks so TMDB calls are not spent on titles the user never opens.
 
-If the desktop client persists movie or TV metadata, it should store the recovered
+If the client persists movie or TV metadata, it should store the recovered
 English overview after a successful fallback call. Future plain `/lookup`
 responses can still have an empty localized overview, because `/lookup` returns
 the localized TMDB search result and does not merge fallback cache entries.
@@ -550,8 +548,8 @@ pnpm exec wrangler secret put API_BEARER_TOKEN
 
 `TMDB_TOKEN` is only used server-side by this Worker and must never leave it.
 
-`API_BEARER_TOKEN` is shared with the desktop client. Because the client is a desktop
-app, the token ships inside its binary and can be extracted: treat it as a soft
+`API_BEARER_TOKEN` is shared with the desktop client. Because the client is a
+desktop app, the token ships inside its binary and can be extracted: treat it as a soft
 barrier against casual calls, not as authentication. The real limits on abuse
 are the Worker rate limits and the KV cache in front of TMDB.
 
@@ -676,7 +674,7 @@ If a custom domain is added later, protect routes at the Cloudflare edge level:
 
 - Home `/`: public with rate limiting.
 - `/lookup`, `/lookup/batch`, and `/translate`: protected or rate-limited depending on how
-  the desktop client calls them.
+  the client calls them.
 - `/daily`: diagnostic endpoint, should stay protected.
 
 Deploy:
